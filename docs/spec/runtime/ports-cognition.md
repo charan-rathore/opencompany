@@ -208,14 +208,18 @@ construction, ≥1 response per cycle) are inherited, not re-verified.
 
 ## ChannelAdapter
 
-Inbound/outbound conversation surfaces. The built-in `"operator"` channel is
+Outbound conversation surfaces. The built-in `"operator"` channel is
 always present; others (email, tinyplace-dm, …) usually delegate to OpenHuman.
+
+Inbound messages do **not** flow through this trait (issue #1958). They
+arrive as `CompanyEvent::OperatorMessage` through the HTTP chat route and
+the ACP `session/prompt` route. Every implementation of the old `inbound()`
+stream returned empty; the port is an outbound-only sink over the event log.
 
 ```rust
 // src/ports/channel.rs
 pub trait ChannelAdapter: Send + Sync {
     fn channel_id(&self) -> &str; // "operator", "email", "tinyplace-dm", ...
-    fn inbound(&self) -> BoxStream<'static, InboundMessage>;
     async fn send(&self, msg: OutboundMessage) -> Result<()>;
 }
 ```
