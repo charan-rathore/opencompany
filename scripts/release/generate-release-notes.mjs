@@ -245,6 +245,11 @@ export function extractPullRequestNumbers(subject) {
 // `%x1f` between fields and `%x1e` between records: both are ASCII separators
 // that cannot occur in a commit subject, an author name, or an email, so no
 // commit message can forge a record boundary the way a newline delimiter would.
+//
+// The sixth field is `%P`, the space-separated list of parent SHAs. A commit
+// with two or more parents is a regular merge commit — the author is whoever
+// clicked Merge, which is not necessarily the contributor. `attributeMergeCommits`
+// uses `isMerge` to fix up PR attribution before `collectContributorStats` runs.
 export function parseGitLog(logText) {
   if (!logText.trim()) {
     return [];
@@ -255,8 +260,11 @@ export function parseGitLog(logText) {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .map((entry) => {
-      const [sha, subject, authorName, authorEmail, authoredAt] = entry.split('\x1f');
+      const [sha, subject, authorName, authorEmail, authoredAt, parentsStr] = entry.split('\x1f');
       const prNumbers = extractPullRequestNumbers(subject);
+      // `%P` is absent in older callers/tests that omit it from the format
+      // string; treat a missing or empty parents field as a non-merge commit.
+      const parents = parentsStr ? parentsStr.trim().split(/\s+/).filter(Boolean) : [];
       return {
         sha,
         shortSha: sha.slice(0, 9),
@@ -268,16 +276,111 @@ export function parseGitLog(logText) {
         // The LAST number wins. A squashed merge reads "fix: thing (#12) (#34)"
         // when the branch itself referenced an issue; #34 is the merge.
         primaryPrNumber: prNumbers.at(-1) || null,
+        parents,
+        // true only for commits that have TWO OR MORE parents, i.e. a real
+        // merge commit. Squash merges have a single parent and carry the
+        // correct author already; they must not be re-attributed.
+        isMerge: parents.length >= 2,
       };
     });
 }
 
 function collectCommits(from, to, fromRoot = false) {
-  const format = '%H%x1f%s%x1f%an%x1f%ae%x1f%aI%x1e';
+  // `%P` appended: the space-separated parent SHAs needed by attributeMergeCommits
+  // to identify regular merge commits and locate their branch commits.
+  const format = '%H%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%P%x1e';
   // `git log <to>` rather than `<root>..<to>`, so the root commit is included.
   const range = fromRoot ? [to] : [`${from}..${to}`];
   const output = runGit(['log', ...range, '--reverse', `--format=${format}`]);
   return parseGitLog(output);
+}
+
+// Re-attribute PRs carried by merge commits to the branch-commit authors.
+//
+// For a regular merge commit the git author is whoever clicked Merge, not the
+// contributor who wrote the branch. `collectContributorStats` attributes the
+// PR to whichever commit carries `primaryPrNumber` — which for regular merges
+// is always the merge commit, so the maintainer accumulates PRs they did not
+// write and the real author gets no PR credit (issue #1901).
+//
+// The fix:
+//   1. Find each merge commit (isMerge === true) that carries a primaryPrNumber.
+//   2. Call fetchBranchShas(sha) to get the SHAs reachable from the second
+//      parent but not the first — i.e. the branch commits.
+//   3. For every such SHA that is already present in `commits` and does NOT
+//      already carry its own primaryPrNumber, assign the merge's PR number to
+//      it instead.
+//   4. Clear primaryPrNumber from the merge commit itself so the maintainer
+//      does not accumulate it.
+//
+// If fetchBranchShas throws, returns an empty list, or returns SHAs not in
+// `commits`, the merge commit is left unchanged and the PR stays attributed to
+// the merge author — graceful degradation instead of a fatal error.
+//
+// `fetchBranchShas` is injected for testability; production code passes the
+// function returned by makeBranchShasFetcher(). All attribution remains in
+// git-identity space — no GitHub login lookup is performed (issue #1901
+// explains why that join is unreliable).
+export function attributeMergeCommits(commits, fetchBranchShas) {
+  const bySha = new Map(commits.map((c) => [c.sha, c]));
+  // merge SHA → set of branch SHAs to receive the PR number
+  const cleared = new Set();
+  const attributed = new Map(); // branch SHA → PR number
+
+  for (const commit of commits) {
+    if (!commit.isMerge || !commit.primaryPrNumber) {
+      continue;
+    }
+    let branchShas;
+    try {
+      branchShas = fetchBranchShas(commit.sha);
+    } catch {
+      // Unusual topology or git error — degrade gracefully; keep merge attribution.
+      continue;
+    }
+    // Only consider SHAs that are already present in the commit range and do
+    // not yet carry a primaryPrNumber of their own (stacked-PR safety).
+    const targets = branchShas.filter(
+      (sha) => bySha.has(sha) && !bySha.get(sha)?.primaryPrNumber,
+    );
+    if (targets.length === 0) {
+      // No attributable branch commits found in this range — fall back to
+      // keeping the PR on the merge commit so it is never silently lost.
+      continue;
+    }
+    cleared.add(commit.sha);
+    for (const sha of targets) {
+      attributed.set(sha, commit.primaryPrNumber);
+    }
+  }
+
+  if (cleared.size === 0) {
+    return commits; // Fast path: nothing to rewrite.
+  }
+
+  return commits.map((commit) => {
+    if (cleared.has(commit.sha)) {
+      // Merge commit: clear the PR so the maintainer is not credited.
+      return { ...commit, primaryPrNumber: null };
+    }
+    const prNumber = attributed.get(commit.sha);
+    if (prNumber !== undefined) {
+      // Branch commit: assign the merge PR; add it to prNumbers so the commit
+      // is not mistakenly listed in uncategorizedCommits.
+      return { ...commit, primaryPrNumber: prNumber, prNumbers: [...commit.prNumbers, prNumber] };
+    }
+    return commit;
+  });
+}
+
+// Returns a fetchBranchShas function that shells out to git. Kept separate
+// from attributeMergeCommits so that function stays a pure transformation that
+// unit tests can call with a synthetic graph.
+function makeBranchShasFetcher() {
+  return (sha) => {
+    const output = runGit(['rev-list', `${sha}^1..${sha}^2`], { allowFailure: true });
+    return output.split('\n').map((s) => s.trim()).filter(Boolean);
+  };
 }
 
 // Everything reachable from the START of the range. Anyone absent from this set
@@ -838,7 +941,10 @@ async function main() {
   assertRefExists(resolvedTo, 'End');
 
   console.error(`[release-notes] Collecting ${repo} changes from ${from} to ${resolvedTo}`);
-  const commits = collectCommits(from, resolvedTo, fromRoot);
+  const rawCommits = collectCommits(from, resolvedTo, fromRoot);
+  // Re-attribute merge-commit PRs from the maintainer (merge author) to the
+  // branch-commit authors who actually wrote the work (issue #1901).
+  const commits = attributeMergeCommits(rawCommits, makeBranchShasFetcher());
 
   // An EMPTY RANGE is an error, not a document. Re-dispatching a release whose
   // tag is already the latest published one makes start and end the same

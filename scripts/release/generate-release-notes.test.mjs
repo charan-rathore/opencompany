@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  attributeMergeCommits,
   buildOpenAiRequest,
   serializeOpenAiPayload,
   buildReleasePayload,
@@ -278,6 +279,223 @@ test('groupPullRequestsByHighlight anchors keywords to word starts', () => {
   assert.match(titleFor(stillMatched, 3), /Desktop/);
   assert.match(titleFor(stillMatched, 4), /Companies/);
   assert.match(titleFor(stillMatched, 5), /Ledgers/);
+});
+
+// ---------------------------------------------------------------------------
+// attributeMergeCommits — issue #1901
+//
+// These tests use a synthetic commit graph so they run without shelling out
+// to git. The `fetchBranchShas` argument is a pure function over the fake
+// SHA map, making every assertion fully deterministic.
+// ---------------------------------------------------------------------------
+
+// Helper: build a commit record in the shape parseGitLog emits.
+function makeCommit(sha, subject, authorName, authorEmail, { parents = [] } = {}) {
+  const prNumbers = extractPullRequestNumbers(subject);
+  return {
+    sha,
+    shortSha: sha.slice(0, 9),
+    subject,
+    authorName,
+    authorEmail,
+    authoredAt: '2026-08-01T00:00:00Z',
+    prNumbers,
+    primaryPrNumber: prNumbers.at(-1) || null,
+    parents,
+    isMerge: parents.length >= 2,
+  };
+}
+
+test('attributeMergeCommits: regular merge PR credited to branch author, not maintainer', () => {
+  // Mirrors the concrete bug: PR #1731 was a regular merge authored by Steven
+  // (the maintainer). Its feature commit was authored by Jarno. Before this fix
+  // the notes credited Steven with #1731 and welcomed Jarno with nothing.
+  const mergeCommit = makeCommit(
+    'merge000',
+    'Merge pull request #1731 from theamazinghenk/feat/company-logo-backend',
+    'Steven Enamakel',
+    'steven@example.com',
+    { parents: ['parent0', 'branch0'] },
+  );
+  const branchCommit = makeCommit(
+    'branch0',
+    'feat(company): uploadable company logo via API',
+    'Jarno de Vries',
+    'jarno@example.com',
+    { parents: ['ancestor0'] },
+  );
+
+  const result = attributeMergeCommits(
+    [branchCommit, mergeCommit],
+    (sha) => (sha === 'merge000' ? ['branch0'] : []),
+  );
+
+  const stats = collectContributorStats(result, new Set());
+  const jarno = stats.find((s) => s.name === 'Jarno de Vries');
+  const steven = stats.find((s) => s.name === 'Steven Enamakel');
+
+  assert.ok(jarno, 'Jarno must appear as a contributor');
+  assert.deepEqual(jarno.prs, [1731], 'PR #1731 must be credited to Jarno');
+  assert.ok(steven, 'Steven must still appear (he made the merge commit)');
+  assert.deepEqual(steven.prs, [], 'Steven must NOT carry PR #1731');
+});
+
+test('attributeMergeCommits: squash-merged PR attribution is unchanged', () => {
+  // Squash merges have a single parent: isMerge === false, author IS the
+  // contributor. attributeMergeCommits must not touch them.
+  const squash = makeCommit(
+    'squash0',
+    'feat: new feature (#42)',
+    'Contributor',
+    'c@example.com',
+    { parents: ['p0'] },
+  );
+  const result = attributeMergeCommits([squash], () => {
+    throw new Error('should not be called for squash commits');
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].primaryPrNumber, 42, 'squash PR number must be preserved');
+  assert.equal(result[0].authorName, 'Contributor');
+});
+
+test('attributeMergeCommits: multiple branch authors both receive the PR', () => {
+  const mergeCommit = makeCommit(
+    'merge1',
+    'Merge pull request #99 from org/feature',
+    'Maintainer',
+    'm@example.com',
+    { parents: ['p1', 'b1'] },
+  );
+  const branchCommit1 = makeCommit('b1', 'feat: first half', 'Alice', 'alice@example.com', { parents: ['p1'] });
+  const branchCommit2 = makeCommit('b2', 'feat: second half', 'Bob', 'bob@example.com', { parents: ['b1'] });
+
+  const result = attributeMergeCommits(
+    [branchCommit2, branchCommit1, mergeCommit],
+    (sha) => (sha === 'merge1' ? ['b1', 'b2'] : []),
+  );
+
+  const stats = collectContributorStats(result, new Set());
+  const alice = stats.find((s) => s.name === 'Alice');
+  const bob = stats.find((s) => s.name === 'Bob');
+  const maintainer = stats.find((s) => s.name === 'Maintainer');
+
+  assert.deepEqual(alice?.prs, [99]);
+  assert.deepEqual(bob?.prs, [99]);
+  assert.deepEqual(maintainer?.prs, []);
+});
+
+test('attributeMergeCommits: graceful fallback when fetchBranchShas throws', () => {
+  // If git topology is unusual (e.g. shallow clone, detached HEAD), the shell
+  // call may throw. The PR must remain on the merge author rather than being lost.
+  const mergeCommit = makeCommit(
+    'merge2',
+    'Merge pull request #55 from org/fix',
+    'Maintainer',
+    'm@example.com',
+    { parents: ['p2', 'b3'] },
+  );
+
+  const result = attributeMergeCommits([mergeCommit], () => {
+    throw new Error('git topology error');
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].primaryPrNumber, 55, 'PR must fall back to merge author on error');
+  assert.equal(result[0].authorName, 'Maintainer');
+});
+
+test('attributeMergeCommits: graceful fallback when no branch SHAs in commit list', () => {
+  // Branch commits may predate the range (e.g. only the merge landed in this
+  // release window). If none of the returned SHAs appear in `commits`, the
+  // merge commit is left untouched so the PR is not silently dropped.
+  const mergeCommit = makeCommit(
+    'merge3',
+    'Merge pull request #77 from org/old',
+    'Maintainer',
+    'm@example.com',
+    { parents: ['p3', 'b_old'] },
+  );
+
+  const result = attributeMergeCommits(
+    [mergeCommit],
+    () => ['b_old_that_is_not_in_list'],
+  );
+
+  assert.equal(result[0].primaryPrNumber, 77, 'PR must remain on merge author when branch SHA not in range');
+});
+
+test('attributeMergeCommits: commits without PR numbers are not affected', () => {
+  const plain = makeCommit('c1', 'chore: tidy up', 'Dev', 'd@example.com', { parents: ['p'] });
+  const result = attributeMergeCommits([plain], () => []);
+  assert.equal(result[0], plain, 'plain commit must be returned as-is (same reference)');
+});
+
+test('parseGitLog preserves parents and isMerge fields', () => {
+  // Six-field format used by collectCommits after the #1901 fix.
+  const mergeEntry = [
+    '6b05c31191541fada',
+    'Merge pull request #1731 from theamazinghenk/feat/company-logo-backend',
+    'Steven Enamakel',
+    'steven@example.com',
+    '2026-08-01T00:00:00Z',
+    '554f357fb8a57cf3 de50018946eb2e13', // two parent SHAs
+  ].join('\x1f');
+  const featureEntry = [
+    'de50018946eb2e13',
+    'feat(company): uploadable company logo via API',
+    'Jarno de Vries',
+    'jarno@example.com',
+    '2026-07-30T00:00:00Z',
+    'e440c0b6b16bf70f', // single parent
+  ].join('\x1f');
+
+  const commits = parseGitLog([mergeEntry, featureEntry].join('\x1e'));
+  assert.equal(commits.length, 2);
+
+  const merge = commits[0];
+  assert.equal(merge.isMerge, true);
+  assert.equal(merge.parents.length, 2);
+  assert.equal(merge.primaryPrNumber, 1731);
+
+  const feature = commits[1];
+  assert.equal(feature.isMerge, false);
+  assert.equal(feature.parents.length, 1);
+  assert.equal(feature.primaryPrNumber, null);
+});
+
+test('attributeMergeCommits end-to-end: mirrors real PR #1731 topology', () => {
+  // Synthetic data shaped after the actual history:
+  //   merge  6b05c  authored by Steven  carries PR #1731
+  //   branch de500  authored by Jarno   carries no PR number
+  // Expected after attribution: Jarno has prs=[1731], Steven has prs=[].
+  const merge = makeCommit(
+    '6b05c31191541fada2daf0910980e98c19732b27',
+    'Merge pull request #1731 from theamazinghenk/feat/company-logo-backend',
+    'Steven Enamakel',
+    '31011319+senamakel@users.noreply.github.com',
+    { parents: ['554f357fb8a57cf3628d59e0dc9d1f34b42f5cf9', 'de50018946eb2e135112316abc2fb96f058e2763'] },
+  );
+  const branch = makeCommit(
+    'de50018946eb2e135112316abc2fb96f058e2763',
+    'feat(company): uploadable company logo via API',
+    'Jarno de Vries',
+    'jarno@match-day.nl',
+    { parents: ['e440c0b6b16bf70f5b912028d9bcb723c2624bee'] },
+  );
+
+  const attributed = attributeMergeCommits(
+    [branch, merge],
+    (sha) => (sha === merge.sha ? [branch.sha] : []),
+  );
+  const stats = collectContributorStats(attributed, new Set());
+  const jarno = stats.find((s) => s.name === 'Jarno de Vries');
+  const steven = stats.find((s) => s.name === 'Steven Enamakel');
+
+  assert.deepEqual(jarno?.prs, [1731], 'PR #1731 must belong to Jarno');
+  assert.deepEqual(steven?.prs, [], 'Steven must not hold PR #1731');
+  // First-time contributor detection remains in git-identity space.
+  assert.equal(jarno?.isNew, true, 'Jarno is a new contributor when prior set is empty');
 });
 
 test('serializeOpenAiPayload trims non-PR collections to reach the cap', () => {
