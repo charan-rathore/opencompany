@@ -240,12 +240,7 @@ async fn console_does_not_shadow_unmatched_reserved_paths() {
     // A 405 is still proof the console did not shadow the path, so both codes
     // satisfy the invariant (issue #1979).
     let acp_response = app
-        .oneshot(
-            Request::builder()
-                .uri("/acp")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri("/acp").body(Body::empty()).unwrap())
         .await
         .unwrap();
     let expected_acp_status = if cfg!(feature = "acp") {
@@ -259,9 +254,11 @@ async fn console_does_not_shadow_unmatched_reserved_paths() {
         "path: /acp (feature acp={})",
         cfg!(feature = "acp"),
     );
-    assert!(!body_text(acp_response)
-        .await
-        .contains("<title>console</title>"));
+    assert!(
+        !body_text(acp_response)
+            .await
+            .contains("<title>console</title>")
+    );
 }
 
 #[test]

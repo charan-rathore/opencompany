@@ -1242,13 +1242,19 @@ jobs:
       - name: Test the runner lane
         run: scripts/ci/run-scoped-suite.sh "runner" acp,runner,tinymemory runner
 
-      # The ACP surface. Two invocations, not one: `run-scoped-suite.sh` takes
+      # The ACP surface. One invocation per filter: `run-scoped-suite.sh` takes
       # exactly one filter, and a second bare argument to `cargo test` narrows
       # the selection to nothing rather than adding a module.
+      # The third invocation (`server::routes`) covers the feature-matrix case
+      # identified in issue #1979: `console_does_not_shadow_unmatched_reserved_paths`
+      # is an unconditional test, but its `/acp` assertion differs by feature
+      # (404 without `acp`, 405 with it). Without this step the 405 branch was
+      # never exercised by CI.
       - name: Test the ACP surface
         run: |
           scripts/ci/run-scoped-suite.sh "acp server" acp,runner,tinymemory server::acp
           scripts/ci/run-scoped-suite.sh "acp run turn" acp,runner,tinymemory harness::acp::run_turn
+          scripts/ci/run-scoped-suite.sh "acp routes" acp,runner,tinymemory server::routes
 
       # Issue #788: Chargebee billing — the REST layer (`chargebee::`) and the
       # toolbelt bridge (`harness::chargebee`) in one filter, which selects both.
