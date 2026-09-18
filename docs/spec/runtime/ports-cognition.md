@@ -1,8 +1,8 @@
 # Cognition and channel ports
 
 The two seams a cycle runs across: the `Brain` that does the thinking, and the
-`ChannelAdapter` that carries the conversation in and out. Part of the port
-contracts indexed by [ports.md](ports.md).
+`ChannelAdapter` — the outbound surface for conversation delivery. Part of the
+port contracts indexed by [ports.md](ports.md).
 
 ## Brain
 
@@ -211,10 +211,23 @@ construction, ≥1 response per cycle) are inherited, not re-verified.
 Outbound conversation surfaces. The built-in `"operator"` channel is
 always present; others (email, tinyplace-dm, …) usually delegate to OpenHuman.
 
-Inbound messages do **not** flow through this trait (issue #1958). They
-arrive as `CompanyEvent::OperatorMessage` through the HTTP chat route and
-the ACP `session/prompt` route. Every implementation of the old `inbound()`
-stream returned empty; the port is an outbound-only sink over the event log.
+Inbound messages do **not** flow through this trait (issue #1958). Ingress is
+route-specific:
+
+- **Operator chat** arrives as `CompanyEvent::OperatorMessage` via the HTTP chat
+  route and the ACP `session/prompt` route.
+- **Email / webhooks** are filed into `InboxStore` and drive
+  `CompanyEvent::WebhookReceived`; they do not become `OperatorMessage`.
+- Other integrations have their own runtime paths.
+
+Every implementation of the old `inbound()` stream returned `stream::empty()`;
+the method was dead and is now removed. Delivery mechanisms vary by
+implementation: `OperatorChannel` appends to the event log, `DeskChannel` does
+the same, and `OpenHumanChannelAdapter` dispatches over JSON-RPC.
+
+**API migration (issue #1958):** removing `inbound()` is a source-compatibility
+break for downstream `ChannelAdapter` implementers. There is no replacement —
+the method was dead. Implementers must remove `inbound()` from their type.
 
 ```rust
 // src/ports/channel.rs

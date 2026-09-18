@@ -1,9 +1,10 @@
 //! [`OpenHumanChannelAdapter`]: a [`ChannelAdapter`] backed by openhuman-core.
 //!
 //! Outbound messages are delivered over JSON-RPC (`openhuman.channels_send`).
-//! Inbound delivery is not this port's job (issue #1958): messages arrive as
-//! `CompanyEvent::OperatorMessage` through HTTP and ACP routes. openhuman-core's
-//! `/events` schema is upstream-unstable and drives no control flow here.
+//! Inbound delivery is not this port's job (issue #1958). This adapter covers
+//! channels such as email whose inbound path is `InboxStore` / `WebhookReceived`,
+//! not `OperatorMessage`. openhuman-core's `/events` schema is upstream-unstable
+//! and drives no control flow here.
 
 use std::sync::Arc;
 
