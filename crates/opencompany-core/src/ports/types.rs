@@ -3045,8 +3045,10 @@ pub enum EvictionPolicy {
 /// **Deprecated (issue #1958):** `ChannelAdapter::inbound()` was removed because
 /// every implementation returned an empty stream. This type is retained to avoid
 /// a second public API break; downstream code should stop referencing it.
-/// Inbound messages arrive through route-specific paths (`CompanyEvent::OperatorMessage`
-/// for operator chat, `CompanyEvent::WebhookReceived` for email/webhooks).
+/// Inbound messages arrive through route-specific paths:
+/// `CompanyEvent::OperatorMessage` for operator chat (HTTP / ACP routes);
+/// `InboxStore` for email ingress (not `CompanyEvent::WebhookReceived`, which is
+/// for generic webhooks — the two ingress paths are distinct).
 #[deprecated(
     since = "0.2.4",
     note = "ChannelAdapter::inbound() was removed (issue #1958). \

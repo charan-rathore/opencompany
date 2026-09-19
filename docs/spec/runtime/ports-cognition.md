@@ -225,9 +225,11 @@ the method was dead and is now removed. Delivery mechanisms vary by
 implementation: `OperatorChannel` appends to the event log, `DeskChannel` does
 the same, and `OpenHumanChannelAdapter` dispatches over JSON-RPC.
 
-**API migration (issue #1958):** removing `inbound()` is a source-compatibility
-break for downstream `ChannelAdapter` implementers. There is no replacement —
-the method was dead. Implementers must remove `inbound()` from their type.
+**API migration (issue #1958):** `inbound()` has been removed. A deprecated
+default shim is provided so existing out-of-tree implementations compile with a
+warning rather than a hard break. Remove `inbound()` from your
+`ChannelAdapter` implementation and migrate callers to the route-specific
+ingress paths described above.
 
 ```rust
 // src/ports/channel.rs
