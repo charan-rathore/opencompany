@@ -2,8 +2,8 @@
 //!
 //! Inbound messages do **not** flow through this trait (issue #1958). Ingress
 //! is route-specific: operator chat arrives as `CompanyEvent::OperatorMessage`
-//! via the HTTP chat route and the ACP `session/prompt` route; email ingress
-//! is filed into [`crate::ports::InboxStore`]; webhooks emit
+//! via the HTTP chat route and the ACP `session/prompt` route; email/webhook
+//! ingress is filed into [`crate::ports::InboxStore`] and emits
 //! `CompanyEvent::WebhookReceived`; other integrations have their own paths.
 //!
 //! **API migration:** [`ChannelAdapter::inbound`] remains as a deprecated
@@ -39,8 +39,8 @@ pub trait ChannelAdapter: Send + Sync {
     /// downstream crates that still declare or call `inbound` compile with a
     /// deprecation warning instead of a hard break. New code must not use this
     /// method — route inbound traffic through `CompanyEvent::OperatorMessage`
-    /// (operator chat / ACP), [`crate::ports::InboxStore`] (email), or
-    /// `CompanyEvent::WebhookReceived` (webhooks).
+    /// (operator chat / ACP), or through [`crate::ports::InboxStore`] plus
+    /// `CompanyEvent::WebhookReceived` (email / webhooks).
     #[deprecated(
         since = "0.2.4",
         note = "ChannelAdapter is outbound-only (issue #1958). Inbound messages \

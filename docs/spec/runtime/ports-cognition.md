@@ -216,9 +216,8 @@ route-specific:
 
 - **Operator chat** arrives as `CompanyEvent::OperatorMessage` via the HTTP chat
   route and the ACP `session/prompt` route.
-- **Email** is filed into `InboxStore` (route-specific ingress; not this trait).
-- **Webhooks** emit `CompanyEvent::WebhookReceived`; they do not become
-  `OperatorMessage`.
+- **Email / webhooks** are filed into `InboxStore` and drive
+  `CompanyEvent::WebhookReceived`; they do not become `OperatorMessage`.
 - Other integrations have their own runtime paths.
 
 Every implementation of the old `inbound()` stream returned `stream::empty()`;
