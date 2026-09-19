@@ -312,9 +312,11 @@ function collectCommits(from, to, fromRoot = false) {
 //      Same-PR branch commits must count: excluding them left the merge uncleared
 //      and double-credited PR N to both the maintainer and the branch author.
 //      A different primaryPrNumber (stacked PR) still excludes the commit.
-//   4. Clear primaryPrNumber — and that number from prNumbers — on the merge
-//      so the maintainer is not credited and later collectors that still scan
-//      prNumbers cannot re-attach the merge identity to the PR.
+//   4. Clear primaryPrNumber on the merge so the maintainer is not credited.
+//      Leave the PR in prNumbers: the only consumer of that field is
+//      uncategorizedCommits (empty prNumbers ⇒ noise bucket). Stripping it
+//      would publish "Merge pull request #N…" as uncategorized. Contributor
+//      and PR grouping both key off primaryPrNumber alone.
 //
 // If fetchBranchShas throws, returns an empty list, or returns SHAs not in
 // `commits`, the merge commit is left unchanged and the PR stays attributed to

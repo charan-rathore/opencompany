@@ -498,11 +498,10 @@ test('attributeMergeCommits end-to-end: mirrors real PR #1731 topology', () => {
   assert.equal(jarno?.isNew, true, 'Jarno is a new contributor when prior set is empty');
 });
 
-test('attributeMergeCommits: cleared merge commit loses PR from prNumbers too', () => {
-  // Regression for PR #2411 review: clearing only primaryPrNumber was not enough.
-  // Downstream PR collection iterates prNumbers to associate commits with PRs,
-  // so the merge commit would keep the maintainer's identity as the PR author
-  // even after primaryPrNumber was set to null.
+test('attributeMergeCommits: cleared merge keeps prNumbers so it stays categorized', () => {
+  // primaryPrNumber alone drives contributor/PR grouping. prNumbers is only
+  // used to decide uncategorizedCommits — stripping the PR there would push
+  // "Merge pull request #N…" into the noise bucket.
   const mergeCommit = makeCommit(
     'merge001',
     'Merge pull request #1800 from contributor/feat/thing',
@@ -525,8 +524,7 @@ test('attributeMergeCommits: cleared merge commit loses PR from prNumbers too', 
 
   const mergeAfter = result.find((c) => c.sha === 'merge001');
   assert.equal(mergeAfter.primaryPrNumber, null, 'primaryPrNumber must be null');
-  // prNumbers must also drop the PR so the merge commit is no longer linked to it.
-  assert.deepEqual(mergeAfter.prNumbers, [], 'prNumbers must not retain the cleared PR number');
+  assert.deepEqual(mergeAfter.prNumbers, [1800], 'prNumbers must retain the PR for categorization');
 });
 
 test('attributeMergeCommits: same-PR branch commit clears merge without double-credit', () => {
