@@ -224,8 +224,19 @@ async fn console_does_not_shadow_unmatched_reserved_paths() {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path: {path}");
-        assert!(!body_text(response).await.contains("<title>console</title>"));
+        let status = response.status();
+        let body = body_text(response).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "reserved path {path} must 404 when unmatched; got {status}, body starts: {:?}",
+            body.chars().take(120).collect::<String>(),
+        );
+        assert!(
+            !body.contains("<title>console</title>"),
+            "reserved path {path} must not fall through to the SPA shell; body starts: {:?}",
+            body.chars().take(120).collect::<String>(),
+        );
     }
 
     // `/acp` is a reserved prefix in both feature states (see `RESERVED_PREFIXES`
@@ -238,7 +249,8 @@ async fn console_does_not_shadow_unmatched_reserved_paths() {
     //   the correct method-level rejection from the mounted handler.
     //
     // A 405 is still proof the console did not shadow the path, so both codes
-    // satisfy the invariant (issue #1979).
+    // satisfy the invariant (issue #1979). CI covers both arms: the default
+    // `cargo test --locked` lane (no `acp`) and the ACP lane (`--features acp,…`).
     let acp_response = app
         .oneshot(Request::builder().uri("/acp").body(Body::empty()).unwrap())
         .await
@@ -248,16 +260,20 @@ async fn console_does_not_shadow_unmatched_reserved_paths() {
     } else {
         StatusCode::NOT_FOUND
     };
+    let acp_status = acp_response.status();
+    let acp_body = body_text(acp_response).await;
     assert_eq!(
-        acp_response.status(),
+        acp_status,
         expected_acp_status,
-        "path: /acp (feature acp={})",
+        "GET /acp with feature acp={} must be {expected_acp_status}; got {acp_status}, body starts: {:?}",
         cfg!(feature = "acp"),
+        acp_body.chars().take(120).collect::<String>(),
     );
     assert!(
-        !body_text(acp_response)
-            .await
-            .contains("<title>console</title>")
+        !acp_body.contains("<title>console</title>"),
+        "GET /acp must not fall through to the SPA shell (feature acp={}); body starts: {:?}",
+        cfg!(feature = "acp"),
+        acp_body.chars().take(120).collect::<String>(),
     );
 }
 
