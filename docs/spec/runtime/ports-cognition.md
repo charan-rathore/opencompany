@@ -216,25 +216,28 @@ route-specific:
 
 - **Operator chat** arrives as `CompanyEvent::OperatorMessage` via the HTTP chat
   route and the ACP `session/prompt` route.
-- **Email / webhooks** are filed into `InboxStore` and drive
-  `CompanyEvent::WebhookReceived`; they do not become `OperatorMessage`.
+- **Email** is filed into `InboxStore` (route-specific ingress; not this trait).
+- **Webhooks** emit `CompanyEvent::WebhookReceived`; they do not become
+  `OperatorMessage`.
 - Other integrations have their own runtime paths.
 
 Every implementation of the old `inbound()` stream returned `stream::empty()`;
-the method was dead and is now removed. Delivery mechanisms vary by
-implementation: `OperatorChannel` appends to the event log, `DeskChannel` does
-the same, and `OpenHumanChannelAdapter` dispatches over JSON-RPC.
+the method was dead. It remains only as a **deprecated default** that still
+returns an empty stream, so out-of-tree implementers keep compiling. Delivery
+mechanisms vary by implementation: `OperatorChannel` appends to the event log,
+`DeskChannel` does the same, and `OpenHumanChannelAdapter` dispatches over
+JSON-RPC.
 
-**API migration (issue #1958):** `inbound()` has been removed. A deprecated
-default shim is provided so existing out-of-tree implementations compile with a
-warning rather than a hard break. Remove `inbound()` from your
-`ChannelAdapter` implementation and migrate callers to the route-specific
-ingress paths described above.
+**API migration (issue #1958):** prefer removing any `inbound()` override and
+never call the method. The trait default preserves source compatibility; there
+is no replacement stream because ingress is route-specific (see above).
 
 ```rust
 // src/ports/channel.rs
 pub trait ChannelAdapter: Send + Sync {
     fn channel_id(&self) -> &str; // "operator", "email", "tinyplace-dm", ...
+    #[deprecated] // empty default — do not call or override in new code
+    fn inbound(&self) -> BoxStream<'static, InboundMessage> { /* empty */ }
     async fn send(&self, msg: OutboundMessage) -> Result<()>;
 }
 ```
