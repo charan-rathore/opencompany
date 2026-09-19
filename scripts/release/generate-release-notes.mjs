@@ -381,16 +381,9 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
   return commits.map((commit) => {
     if (cleared.has(commit.sha)) {
       // Merge commit: clear primaryPrNumber so the maintainer is not credited.
-      // Also strip the same number from prNumbers — downstream PR collection
-      // uses prNumbers to associate commits with PRs, so leaving it there would
-      // keep the merge commit (and thus the maintainer's identity) as the PR
-      // author even after we cleared primaryPrNumber (PR #2411 review).
-      const prToRemove = commit.primaryPrNumber;
-      return {
-        ...commit,
-        primaryPrNumber: null,
-        prNumbers: commit.prNumbers.filter((n) => n !== prToRemove),
-      };
+      // Keep prNumbers intact — only uncategorizedCommits reads that field, and
+      // emptying it would dump the merge subject into the noise bucket.
+      return { ...commit, primaryPrNumber: null };
     }
     const prNumber = attributed.get(commit.sha);
     if (prNumber !== undefined) {

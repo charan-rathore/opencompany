@@ -555,7 +555,7 @@ test('attributeMergeCommits: same-PR branch commit clears merge without double-c
   const merge = result.find((c) => c.sha === 'mergeSame');
   const branch = result.find((c) => c.sha === 'bSame');
   assert.equal(merge.primaryPrNumber, null, 'merge primaryPrNumber must be cleared');
-  assert.deepEqual(merge.prNumbers, [], 'merge prNumbers must drop the cleared PR');
+  assert.deepEqual(merge.prNumbers, [88], 'merge prNumbers stay for categorization');
   assert.equal(branch.primaryPrNumber, 88, 'branch keeps its existing primaryPrNumber');
   assert.deepEqual(branch.prNumbers, [88], 'branch metadata is preserved, not duplicated');
 
