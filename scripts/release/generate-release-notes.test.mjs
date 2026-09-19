@@ -529,6 +529,45 @@ test('attributeMergeCommits: cleared merge commit loses PR from prNumbers too', 
   assert.deepEqual(mergeAfter.prNumbers, [], 'prNumbers must not retain the cleared PR number');
 });
 
+test('attributeMergeCommits: same-PR branch commit clears merge without double-credit', () => {
+  // Branch subjects sometimes already carry `(#N)` for the same PR the merge
+  // closes. Excluding those targets left the merge uncleared, so both the
+  // maintainer and the branch author received PR N in collectContributorStats
+  // (CodeRabbit on PR #2411).
+  const mergeCommit = makeCommit(
+    'mergeSame',
+    'Merge pull request #88 from org/feature',
+    'Maintainer',
+    'm@example.com',
+    { parents: ['pSame', 'bSame'] },
+  );
+  const branchCommit = makeCommit(
+    'bSame',
+    'feat: already tagged (#88)',
+    'Contributor',
+    'c@example.com',
+    { parents: ['pSame'] },
+  );
+
+  const result = attributeMergeCommits(
+    [branchCommit, mergeCommit],
+    (sha) => (sha === 'mergeSame' ? ['bSame'] : []),
+  );
+
+  const merge = result.find((c) => c.sha === 'mergeSame');
+  const branch = result.find((c) => c.sha === 'bSame');
+  assert.equal(merge.primaryPrNumber, null, 'merge primaryPrNumber must be cleared');
+  assert.deepEqual(merge.prNumbers, [], 'merge prNumbers must drop the cleared PR');
+  assert.equal(branch.primaryPrNumber, 88, 'branch keeps its existing primaryPrNumber');
+  assert.deepEqual(branch.prNumbers, [88], 'branch metadata is preserved, not duplicated');
+
+  const stats = collectContributorStats(result, new Set());
+  const contributor = stats.find((s) => s.name === 'Contributor');
+  const maintainer = stats.find((s) => s.name === 'Maintainer');
+  assert.deepEqual(contributor?.prs, [88]);
+  assert.deepEqual(maintainer?.prs, [], 'maintainer must not double-credit PR #88');
+});
+
 test('attributeMergeCommits: octopus merge credits both branch parents', () => {
   // Regression for PR #2411 review: the fetcher used sha^1..sha^2, so commits
   // reachable only through a third parent were never targeted and lost their

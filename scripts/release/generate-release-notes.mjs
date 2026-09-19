@@ -305,13 +305,16 @@ function collectCommits(from, to, fromRoot = false) {
 //
 // The fix:
 //   1. Find each merge commit (isMerge === true) that carries a primaryPrNumber.
-//   2. Call fetchBranchShas(sha) to get the SHAs reachable from the second
-//      parent but not the first — i.e. the branch commits.
-//   3. For every such SHA that is already present in `commits` and does NOT
-//      already carry its own primaryPrNumber, assign the merge's PR number to
-//      it instead.
-//   4. Clear primaryPrNumber from the merge commit itself so the maintainer
-//      does not accumulate it.
+//   2. Call fetchBranchShas(sha, parents) to get SHAs from every non-first
+//      parent (two-parent and octopus merges alike).
+//   3. For every such SHA already present in `commits` whose primaryPrNumber is
+//      either unset or already equal to the merge's PR, treat it as a target.
+//      Same-PR branch commits must count: excluding them left the merge uncleared
+//      and double-credited PR N to both the maintainer and the branch author.
+//      A different primaryPrNumber (stacked PR) still excludes the commit.
+//   4. Clear primaryPrNumber — and that number from prNumbers — on the merge
+//      so the maintainer is not credited and later collectors that still scan
+//      prNumbers cannot re-attach the merge identity to the PR.
 //
 // If fetchBranchShas throws, returns an empty list, or returns SHAs not in
 // `commits`, the merge commit is left unchanged and the PR stays attributed to
@@ -336,15 +339,28 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
       // Pass commit.parents so the fetcher can cover every branch parent,
       // not just the second one (octopus-merge safety — PR #2411 review).
       branchShas = fetchBranchShas(commit.sha, commit.parents);
-    } catch {
+    } catch (error) {
       // Unusual topology or git error — degrade gracefully; keep merge attribution.
+      // Non-fatal by design: aborting would cost the whole release's notes.
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `warning: merge attribution skipped for ${commit.sha}: ${message}\n`,
+      );
       continue;
     }
-    // Only consider SHAs that are already present in the commit range and do
-    // not yet carry a primaryPrNumber of their own (stacked-PR safety).
-    const targets = branchShas.filter(
-      (sha) => bySha.has(sha) && !bySha.get(sha)?.primaryPrNumber,
-    );
+    const mergePr = commit.primaryPrNumber;
+    // In-range branch commits whose primaryPrNumber is unset OR already equal
+    // to this merge's PR. Same-PR subjects (feat: … (#N) on the branch) must
+    // count as targets — excluding them left the merge uncleared and
+    // double-credited PR N to both maintainer and branch author (CodeRabbit on
+    // PR #2411). A different primaryPrNumber is a stacked/nested PR — leave it.
+    const targets = branchShas.filter((sha) => {
+      const branch = bySha.get(sha);
+      if (!branch) {
+        return false;
+      }
+      return !branch.primaryPrNumber || branch.primaryPrNumber === mergePr;
+    });
     if (targets.length === 0) {
       // No attributable branch commits found in this range — fall back to
       // keeping the PR on the merge commit so it is never silently lost.
@@ -352,7 +368,7 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
     }
     cleared.add(commit.sha);
     for (const sha of targets) {
-      attributed.set(sha, commit.primaryPrNumber);
+      attributed.set(sha, mergePr);
     }
   }
 
@@ -376,7 +392,11 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
     }
     const prNumber = attributed.get(commit.sha);
     if (prNumber !== undefined) {
-      // Branch commit: assign the merge PR; add it to prNumbers so the commit
+      // Branch commit already carrying this PR keeps its metadata as-is.
+      if (commit.primaryPrNumber === prNumber) {
+        return commit;
+      }
+      // Otherwise assign the merge PR; add it to prNumbers so the commit
       // is not mistakenly listed in uncategorizedCommits.
       return { ...commit, primaryPrNumber: prNumber, prNumbers: [...commit.prNumbers, prNumber] };
     }
