@@ -498,6 +498,85 @@ test('attributeMergeCommits end-to-end: mirrors real PR #1731 topology', () => {
   assert.equal(jarno?.isNew, true, 'Jarno is a new contributor when prior set is empty');
 });
 
+test('attributeMergeCommits: cleared merge commit loses PR from prNumbers too', () => {
+  // Regression for PR #2411 review: clearing only primaryPrNumber was not enough.
+  // Downstream PR collection iterates prNumbers to associate commits with PRs,
+  // so the merge commit would keep the maintainer's identity as the PR author
+  // even after primaryPrNumber was set to null.
+  const mergeCommit = makeCommit(
+    'merge001',
+    'Merge pull request #1800 from contributor/feat/thing',
+    'Maintainer',
+    'maintainer@example.com',
+    { parents: ['base0', 'branch1'] },
+  );
+  const branchCommit = makeCommit(
+    'branch1',
+    'feat: the actual work',
+    'Contributor',
+    'contributor@example.com',
+    { parents: ['base0'] },
+  );
+
+  const result = attributeMergeCommits(
+    [branchCommit, mergeCommit],
+    (sha) => (sha === 'merge001' ? ['branch1'] : []),
+  );
+
+  const mergeAfter = result.find((c) => c.sha === 'merge001');
+  assert.equal(mergeAfter.primaryPrNumber, null, 'primaryPrNumber must be null');
+  // prNumbers must also drop the PR so the merge commit is no longer linked to it.
+  assert.deepEqual(mergeAfter.prNumbers, [], 'prNumbers must not retain the cleared PR number');
+});
+
+test('attributeMergeCommits: octopus merge credits both branch parents', () => {
+  // Regression for PR #2411 review: the fetcher used sha^1..sha^2, so commits
+  // reachable only through a third parent were never targeted and lost their
+  // attribution when the merge commit was cleared.
+  const octopusMerge = makeCommit(
+    'octopus0',
+    'Merge pull request #1900 from author/feat/big',
+    'Maintainer',
+    'maintainer@example.com',
+    { parents: ['base0', 'branch2', 'branch3'] },
+  );
+  const branchCommitA = makeCommit(
+    'branch2',
+    'feat: first branch',
+    'Author A',
+    'a@example.com',
+    { parents: ['base0'] },
+  );
+  const branchCommitB = makeCommit(
+    'branch3',
+    'feat: second branch',
+    'Author B',
+    'b@example.com',
+    { parents: ['base0'] },
+  );
+
+  // The fetcher now receives `parents` and must return SHAs from ALL branch parents.
+  const result = attributeMergeCommits(
+    [branchCommitA, branchCommitB, octopusMerge],
+    // Simulate the corrected fetcher: return both branch commit SHAs when called
+    // with the octopus merge and its parent list.
+    (sha, parents) => {
+      if (sha !== 'octopus0') return [];
+      // All non-first parents contribute; return their direct SHAs as if git
+      // rev-list sha^2 sha^3 ^sha^1 returned them.
+      return parents.slice(1);
+    },
+  );
+
+  const a = result.find((c) => c.sha === 'branch2');
+  const b = result.find((c) => c.sha === 'branch3');
+  const merge = result.find((c) => c.sha === 'octopus0');
+
+  assert.equal(a?.primaryPrNumber, 1900, 'Author A must receive PR #1900');
+  assert.equal(b?.primaryPrNumber, 1900, 'Author B must receive PR #1900');
+  assert.equal(merge?.primaryPrNumber, null, 'Maintainer (octopus merge) must not hold the PR');
+});
+
 test('serializeOpenAiPayload trims non-PR collections to reach the cap', () => {
   // A first-release range is mostly uncategorized commits. Trimming only PRs
   // could never get under the ceiling, so the request was rejected for size

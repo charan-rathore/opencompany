@@ -333,7 +333,9 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
     }
     let branchShas;
     try {
-      branchShas = fetchBranchShas(commit.sha);
+      // Pass commit.parents so the fetcher can cover every branch parent,
+      // not just the second one (octopus-merge safety — PR #2411 review).
+      branchShas = fetchBranchShas(commit.sha, commit.parents);
     } catch {
       // Unusual topology or git error — degrade gracefully; keep merge attribution.
       continue;
@@ -360,8 +362,17 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
 
   return commits.map((commit) => {
     if (cleared.has(commit.sha)) {
-      // Merge commit: clear the PR so the maintainer is not credited.
-      return { ...commit, primaryPrNumber: null };
+      // Merge commit: clear primaryPrNumber so the maintainer is not credited.
+      // Also strip the same number from prNumbers — downstream PR collection
+      // uses prNumbers to associate commits with PRs, so leaving it there would
+      // keep the merge commit (and thus the maintainer's identity) as the PR
+      // author even after we cleared primaryPrNumber (PR #2411 review).
+      const prToRemove = commit.primaryPrNumber;
+      return {
+        ...commit,
+        primaryPrNumber: null,
+        prNumbers: commit.prNumbers.filter((n) => n !== prToRemove),
+      };
     }
     const prNumber = attributed.get(commit.sha);
     if (prNumber !== undefined) {
@@ -377,8 +388,25 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
 // from attributeMergeCommits so that function stays a pure transformation that
 // unit tests can call with a synthetic graph.
 function makeBranchShasFetcher() {
-  return (sha) => {
-    const output = runGit(['rev-list', `${sha}^1..${sha}^2`], { allowFailure: true });
+  return (sha, parents) => {
+    // Collect every commit contributed by the *branch* side of a merge: all
+    // commits reachable from any non-first parent that are NOT reachable from
+    // the first parent (the "onto" side, e.g. main).
+    //
+    // For a standard 2-parent merge this is exactly sha^1..sha^2.
+    // For an octopus merge (3+ parents) we must include every branch parent,
+    // otherwise contributors reachable only through sha^3, sha^4, … are never
+    // targeted and their attribution is silently lost when the merge is cleared
+    // (tinysweeper review on PR #2411).
+    const branchParentRefs = parents.slice(1).map((_, i) => `${sha}^${i + 2}`);
+    if (branchParentRefs.length === 0) {
+      // Single-parent commit: isMerge is false for these, but be safe.
+      return [];
+    }
+    const output = runGit(
+      ['rev-list', ...branchParentRefs, `^${sha}^1`],
+      { allowFailure: true },
+    );
     return output.split('\n').map((s) => s.trim()).filter(Boolean);
   };
 }
