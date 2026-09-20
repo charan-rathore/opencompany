@@ -425,6 +425,13 @@ pub(super) struct ScriptedProvider {
     /// turn then succeeds on the fallback reply, which is how this
     /// scripting seam quietly turned a failure case into a passing one.
     pub(super) fail_when_exhausted: bool,
+    /// Per-call snapshot: `(tool_count, user_message_count)`.
+    ///
+    /// Used by scope/history tests that need to inspect what each individual
+    /// provider call actually saw — without this they could only check the
+    /// final history, which merges both attempts into one view and hides
+    /// per-attempt differences (issue #1871).
+    pub(super) captured: StdMutex<Vec<(usize, usize)>>,
 }
 
 impl ScriptedProvider {
@@ -434,6 +441,7 @@ impl ScriptedProvider {
             calls: std::sync::atomic::AtomicUsize::new(0),
             usage: None,
             fail_when_exhausted: false,
+            captured: StdMutex::new(Vec::new()),
         }
     }
 
@@ -458,6 +466,15 @@ impl ChatModel<()> for ScriptedProvider {
         _request: ModelRequest,
     ) -> tinyinference::Result<ModelResponse> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Record per-call (tool_count, user_message_count) for tests that need
+        // to inspect what each individual provider call actually saw.
+        let tool_count = _request.tools.len();
+        let user_count = _request
+            .messages
+            .iter()
+            .filter(|m| matches!(m, tinyinference::Message::User(_)))
+            .count();
+        self.captured.lock().unwrap().push((tool_count, user_count));
         let with_usage = |reply: &str| {
             let mut response = ModelResponse::assistant(reply);
             response.usage = self.usage;

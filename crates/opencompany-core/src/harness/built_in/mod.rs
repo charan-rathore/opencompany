@@ -1791,6 +1791,18 @@ impl CompanyAgent {
                     // This is the only per-turn duration measured anywhere —
                     // `WorkflowRunNodeRow::elapsed_ms` is per NODE, and a node
                     // is not a turn.
+                    // Issue #1871 (Claim B): capture the history length now,
+                    // before the first attempt touches it.  If the attempt
+                    // fails with EmptyProviderResponse, openhuman's
+                    // `run_turn_via_tinyagents_session` calls
+                    // `record_failed_turn`, which appends the (enriched) user
+                    // message AND a failed-turn note to history before
+                    // returning the error.  Popping only the "last user-role
+                    // row" misses the note and leaves a dangling assistant row
+                    // that causes the retry's second provider request to carry
+                    // a duplicate user message (the original plus the retry's
+                    // own) — see the full explanation in the `Empty` arm below.
+                    let history_len_before_first = agent.history().len();
                     let started = std::time::Instant::now();
                     let first = agent.turn(message).await;
                     let first_elapsed = started.elapsed();
@@ -1870,25 +1882,18 @@ impl CompanyAgent {
                             // brake is armed per turn, so nothing else here
                             // would stop it.
                             //
-                            // **Defence in depth, not a fix to an observed bug,
-                            // and the difference is recorded so nobody re-derives
-                            // it.** The `Empty` arm appears to be unreachable
-                            // after a halt: a halt implies at least one completed
-                            // tool iteration, and openhuman answers the post-halt
-                            // wrap-up with its own synthesised "here's what I did
-                            // this turn" summary — which it substitutes even when
-                            // the wrap-up call returns blank text OR no choices
-                            // at all. Both were scripted against the real turn
-                            // loop and neither reached this arm, so there is no
-                            // test here that would fail without this guard, and
-                            // one was deliberately not left behind pretending
-                            // otherwise. What the guard buys is that the
-                            // invariant stops depending on that substitution
-                            // staying true across a vendored bump.
-                            //
-                            // `halted_for_spend` below still reports the halt
-                            // either way, so the operator gets the notice that
-                            // explains a stub reply rather than silence.
+                            // Issue #1871: the `Empty` arm is genuinely
+                            // reachable from a single ordinary blank completion.
+                            // `harness_turn` raises `EmptyProviderResponse`
+                            // immediately when `outcome.text.trim().is_empty()
+                            // && outcome.tool_calls == 0` — there is no internal
+                            // retry in openhuman for an ordinary blank; the
+                            // `#4093` re-prompt only fires when `tool_calls > 0`.
+                            // A chat-only turn (suppress_tools) reaches this arm
+                            // most easily because the empty tool schema
+                            // guarantees `tool_calls == 0` for the whole turn.
+                            // The `halted_for_spend` field below still surfaces
+                            // the halt notice even when a steer/spend guard fires.
                             let spend_halted = spend_brake.as_ref().is_some_and(|(_, halted)| {
                                 halted.load(std::sync::atomic::Ordering::SeqCst)
                             });
@@ -1911,25 +1916,53 @@ impl CompanyAgent {
                                 // chat-only turn stays reduced, not just the
                                 // first.
                                 //
-                                // Defence in depth, like the guard above it:
-                                // an immediately-blank completion with no tool
-                                // call is retried INSIDE openhuman's own tool
-                                // loop under the SAME per-turn overrides
-                                // (verified by instrumenting a scripted blank
-                                // response — `first` came back
-                                // `Ok("...")` directly, never reaching this
-                                // arm at all), so this specific line is not
-                                // known to fire from any script this suite can
-                                // build. What it buys is that IF this arm ever
-                                // is reached — a terminal `EmptyProviderResponse`
-                                // openhuman raises after exhausting its own
-                                // internal budget — the retry does not silently
-                                // regress to full scope.
-                                if overrides
-                                    != oh::agent::harness::session::TurnOverrides::default()
-                                {
-                                    agent.set_next_turn_overrides(overrides);
-                                }
+                                // Issue #1871 (Claim B): always also set
+                                // `suppress_transcript_autoload` on the retry
+                                // overrides — see the history-rollback comment
+                                // below for why.
+                                let mut retry_overrides = overrides;
+                                retry_overrides.suppress_transcript_autoload = true;
+                                // suppress_transcript_autoload is now always
+                                // non-default, so this always runs.
+                                agent.set_next_turn_overrides(retry_overrides);
+                                // Issue #1871 (Claim B): roll back every
+                                // history row the first attempt appended.
+                                //
+                                // What `Agent::turn` does on
+                                // `EmptyProviderResponse`:
+                                //   1. Pushes the (enriched) user message
+                                //      at turn start (core_turn.rs line 603).
+                                //   2. Gets a blank completion (no text, no
+                                //      tool calls).
+                                //   3. `harness_turn.rs` pops the dangling
+                                //      empty assistant row (#4457 defect A).
+                                //   4. `failed_turn.rs::record_failed_turn`
+                                //      appends the accepted rounds (none here)
+                                //      PLUS a "[turn failed before completion:
+                                //      …]" assistant note AND persists the
+                                //      session transcript to disk.
+                                //
+                                // After step 4 history ends in:
+                                //   [... prior ..., user_msg, assistant_note]
+                                //
+                                // Truncating back to `history_len_before_first`
+                                // drops the user_msg and assistant_note so the
+                                // retry starts from a clean transcript.
+                                //
+                                // WHY suppress_transcript_autoload is also
+                                // needed: when this is the VERY FIRST turn
+                                // (`history_len_before_first == 0`), truncating
+                                // to 0 makes history empty again. The next
+                                // `turn()` call sees empty history and calls
+                                // `try_load_session_transcript()`, which reads
+                                // back the transcript `record_failed_turn` just
+                                // wrote — re-adding the user message and
+                                // recreating the duplicate. Suppressing the
+                                // autoload closes that path without touching
+                                // any prior-turn history (turns before the
+                                // snapshot are below `history_len_before_first`
+                                // and are unaffected by the truncate).
+                                agent.truncate_history_to(history_len_before_first);
                                 let retry_started = std::time::Instant::now();
                                 let second = agent.turn(message).await;
                                 let second_elapsed = retry_started.elapsed();
@@ -6468,3 +6501,6 @@ mod built_in_tests_part09;
 #[cfg(test)]
 #[path = "built_in_tests_part10.rs"]
 mod built_in_tests_part10;
+#[cfg(test)]
+#[path = "built_in_tests_part11.rs"]
+mod built_in_tests_part11;
