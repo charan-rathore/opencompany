@@ -285,7 +285,7 @@ export function parseGitLog(logText) {
     });
 }
 
-function collectCommits(from, to, fromRoot = false) {
+export function collectCommits(from, to, fromRoot = false) {
   // `%P` appended: the space-separated parent SHAs needed by attributeMergeCommits
   // to identify regular merge commits and locate their branch commits.
   const format = '%H%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%P%x1e';
@@ -338,8 +338,9 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
     }
     let branchShas;
     try {
-      // Pass commit.parents so the fetcher can cover every branch parent,
-      // not just the second one (octopus-merge safety — PR #2411 review).
+      // Pass commit.parents so the fetcher covers all non-first parents
+      // (octopus-merge safety: a standard merge has one branch parent;
+      // an octopus merge has several, each with its own contributors).
       branchShas = fetchBranchShas(commit.sha, commit.parents);
     } catch (error) {
       // Unusual topology or git error — degrade gracefully; keep merge attribution.
@@ -351,11 +352,11 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
       continue;
     }
     const mergePr = commit.primaryPrNumber;
-    // In-range branch commits whose primaryPrNumber is unset OR already equal
-    // to this merge's PR. Same-PR subjects (feat: … (#N) on the branch) must
-    // count as targets — excluding them left the merge uncleared and
-    // double-credited PR N to both maintainer and branch author (CodeRabbit on
-    // PR #2411). A different primaryPrNumber is a stacked/nested PR — leave it.
+    // In-range branch commits whose primaryPrNumber is either unset or already
+    // equal to this merge's PR. Same-PR subjects (e.g. "feat: thing (#N)" on
+    // the branch commit) must count as targets — excluding them leaves the merge
+    // uncleared and double-credits PR N to both the maintainer and the branch
+    // author. A different primaryPrNumber is a stacked or nested PR; leave it.
     const targets = branchShas.filter((sha) => {
       const branch = bySha.get(sha);
       if (!branch) {
@@ -401,18 +402,19 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
 
 // Returns a fetchBranchShas function that shells out to git. Kept separate
 // from attributeMergeCommits so that function stays a pure transformation that
-// unit tests can call with a synthetic graph.
-function makeBranchShasFetcher() {
+// unit tests can call with a synthetic graph. Exported for integration tests
+// that operate against a real git repository.
+export function makeBranchShasFetcher() {
   return (sha, parents) => {
     // Collect every commit contributed by the *branch* side of a merge: all
     // commits reachable from any non-first parent that are NOT reachable from
     // the first parent (the "onto" side, e.g. main).
     //
     // For a standard 2-parent merge this is exactly sha^1..sha^2.
-    // For an octopus merge (3+ parents) we must include every branch parent,
-    // otherwise contributors reachable only through sha^3, sha^4, … are never
-    // targeted and their attribution is silently lost when the merge is cleared
-    // (tinysweeper review on PR #2411).
+    // For an octopus merge (3+ parents), every non-first parent must be
+    // included. A fetcher limited to sha^2 would miss commits reachable only
+    // through sha^3, sha^4, …, and those authors lose attribution when the
+    // merge commit is cleared.
     const branchParentRefs = parents.slice(1).map((_, i) => `${sha}^${i + 2}`);
     if (branchParentRefs.length === 0) {
       // Single-parent commit: isMerge is false for these, but be safe.

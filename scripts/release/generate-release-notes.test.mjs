@@ -4,10 +4,10 @@
 // (`frontend/`). Run in CI by the `Console` job, alongside the other
 // repository-wide policy checks.
 //
-// Only the pure functions are covered. `collectCommits`, `fetchPullRequest`
-// and `summarizeWithOpenAi` shell out to git/gh or the network and are not
-// exported; what they produce is a plain object, and every transformation
-// applied to it after that point is tested here.
+// Pure-function unit tests do not shell out. The integration test near the
+// bottom of this file creates a temporary git repository and calls the real
+// `collectCommits` / `makeBranchShasFetcher` path to exercise the full
+// attribution pipeline without a network call.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -16,12 +16,14 @@ import {
   buildOpenAiRequest,
   serializeOpenAiPayload,
   buildReleasePayload,
+  collectCommits,
   collectContributorStats,
   ensureAllPullRequestsLinked,
   extractPullRequestNumbers,
   extractResponseText,
   formatHandleList,
   groupPullRequestsByHighlight,
+  makeBranchShasFetcher,
   parseArgs,
   parseGitHubRepoFromRemote,
   parseGitLog,
@@ -529,9 +531,10 @@ test('attributeMergeCommits: cleared merge keeps prNumbers so it stays categoriz
 
 test('attributeMergeCommits: same-PR branch commit clears merge without double-credit', () => {
   // Branch subjects sometimes already carry `(#N)` for the same PR the merge
-  // closes. Excluding those targets left the merge uncleared, so both the
-  // maintainer and the branch author received PR N in collectContributorStats
-  // (CodeRabbit on PR #2411).
+  // closes. Excluding those branch commits as targets left the merge uncleared,
+  // so both the maintainer and the branch author received PR N in
+  // collectContributorStats — double attribution.
+  // A different primaryPrNumber is a stacked or nested PR and must be left alone.
   const mergeCommit = makeCommit(
     'mergeSame',
     'Merge pull request #88 from org/feature',
@@ -567,9 +570,10 @@ test('attributeMergeCommits: same-PR branch commit clears merge without double-c
 });
 
 test('attributeMergeCommits: octopus merge credits both branch parents', () => {
-  // Regression for PR #2411 review: the fetcher used sha^1..sha^2, so commits
-  // reachable only through a third parent were never targeted and lost their
-  // attribution when the merge commit was cleared.
+  // A fetcher limited to sha^1..sha^2 misses commits reachable only through
+  // a third or later parent: those authors would lose attribution when the merge
+  // commit is cleared, because the merge is still cleared (one branch parent was
+  // found) but only the sha^2 contributors receive the PR number.
   const octopusMerge = makeCommit(
     'octopus0',
     'Merge pull request #1900 from author/feat/big',
@@ -612,6 +616,67 @@ test('attributeMergeCommits: octopus merge credits both branch parents', () => {
   assert.equal(a?.primaryPrNumber, 1900, 'Author A must receive PR #1900');
   assert.equal(b?.primaryPrNumber, 1900, 'Author B must receive PR #1900');
   assert.equal(merge?.primaryPrNumber, null, 'Maintainer (octopus merge) must not hold the PR');
+});
+
+// ---------------------------------------------------------------------------
+// Integration test — real git repository, no network access
+// ---------------------------------------------------------------------------
+//
+// Creates a temporary git repo with a two-parent merge topology to exercise
+// the full collectCommits → attributeMergeCommits → collectContributorStats
+// pipeline, including the real `git log` format string and `git rev-list` call.
+// This guards against the `%P` format field in collectCommits and the
+// rev-list invocation in makeBranchShasFetcher both being correct.
+
+test('integration: regular merge credits branch author via real git topology', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const tmpDir = mkdtempSync(join(tmpdir(), 'oc-release-notes-test-'));
+  const origCwd = process.cwd();
+
+  try {
+    const run = (args, opts = {}) =>
+      execFileSync('git', args, { encoding: 'utf8', cwd: tmpDir, ...opts }).trim();
+
+    run(['init', '-b', 'main']);
+    run(['config', 'user.email', 'maintainer@test.invalid']);
+    run(['config', 'user.name', 'Maintainer']);
+
+    // Base commit — the "from" boundary of the release range.
+    run(['commit', '--allow-empty', '-m', 'chore: init']);
+    const fromRef = run(['rev-parse', 'HEAD']);
+
+    // Feature branch: one commit by Contributor.
+    run(['checkout', '-b', 'feature']);
+    run(['-c', 'user.name=Contributor', '-c', 'user.email=contributor@test.invalid',
+      'commit', '--allow-empty', '-m', 'feat: add widget']);
+
+    // Merge back to main as Maintainer with a PR-style subject.
+    run(['checkout', 'main']);
+    run(['merge', '--no-ff', 'feature', '-m', 'Merge pull request #7 from owner/feature']);
+    const toRef = run(['rev-parse', 'HEAD']);
+
+    // Run the full attribution pipeline against the real repository.
+    process.chdir(tmpDir);
+    const rawCommits = collectCommits(fromRef, toRef);
+    const commits = attributeMergeCommits(rawCommits, makeBranchShasFetcher());
+    process.chdir(origCwd);
+
+    const stats = collectContributorStats(commits, new Set());
+    const contributor = stats.find((s) => s.name === 'Contributor');
+    const maintainer = stats.find((s) => s.name === 'Maintainer');
+
+    assert.ok(contributor, 'Contributor must appear as a contributor');
+    assert.deepEqual(contributor.prs, [7], 'PR #7 must be attributed to Contributor');
+    assert.ok(maintainer, 'Maintainer must appear (authored the merge commit)');
+    assert.deepEqual(maintainer.prs, [], 'Maintainer must not hold PR #7');
+  } finally {
+    try { process.chdir(origCwd); } catch { /* ignore */ }
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('serializeOpenAiPayload trims non-PR collections to reach the cap', () => {
