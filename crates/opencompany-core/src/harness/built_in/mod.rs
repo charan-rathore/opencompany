@@ -1791,18 +1791,6 @@ impl CompanyAgent {
                     // This is the only per-turn duration measured anywhere —
                     // `WorkflowRunNodeRow::elapsed_ms` is per NODE, and a node
                     // is not a turn.
-                    // Issue #1871 (Claim B): capture the history length now,
-                    // before the first attempt touches it.  If the attempt
-                    // fails with EmptyProviderResponse, openhuman's
-                    // `run_turn_via_tinyagents_session` calls
-                    // `record_failed_turn`, which appends the (enriched) user
-                    // message AND a failed-turn note to history before
-                    // returning the error.  Popping only the "last user-role
-                    // row" misses the note and leaves a dangling assistant row
-                    // that causes the retry's second provider request to carry
-                    // a duplicate user message (the original plus the retry's
-                    // own) — see the full explanation in the `Empty` arm below.
-                    let history_len_before_first = agent.history().len();
                     let started = std::time::Instant::now();
                     let first = agent.turn(message).await;
                     let first_elapsed = started.elapsed();
@@ -1916,53 +1904,59 @@ impl CompanyAgent {
                                 // chat-only turn stays reduced, not just the
                                 // first.
                                 //
-                                // Issue #1871 (Claim B): always also set
-                                // `suppress_transcript_autoload` on the retry
-                                // overrides — see the history-rollback comment
-                                // below for why.
-                                let mut retry_overrides = overrides;
-                                retry_overrides.suppress_transcript_autoload = true;
-                                // suppress_transcript_autoload is now always
-                                // non-default, so this always runs.
-                                agent.set_next_turn_overrides(retry_overrides);
                                 // Issue #1871 (Claim B): roll back every
-                                // history row the first attempt appended.
+                                // history row the first attempt appended, while
+                                // PRESERVING any rows that were autoloaded from
+                                // the durable transcript at the start of that
+                                // turn.
                                 //
                                 // What `Agent::turn` does on
                                 // `EmptyProviderResponse`:
-                                //   1. Pushes the (enriched) user message
-                                //      at turn start (core_turn.rs line 603).
-                                //   2. Gets a blank completion (no text, no
+                                //   1. If history is empty, calls
+                                //      `try_load_session_transcript()` — may
+                                //      add N rows from a prior durable
+                                //      transcript.
+                                //   2. Pushes the (enriched) user message
+                                //      (core_turn.rs line 603).
+                                //   3. Gets a blank completion (no text, no
                                 //      tool calls).
-                                //   3. `harness_turn.rs` pops the dangling
+                                //   4. `harness_turn.rs` pops the dangling
                                 //      empty assistant row (#4457 defect A).
-                                //   4. `failed_turn.rs::record_failed_turn`
-                                //      appends the accepted rounds (none here)
-                                //      PLUS a "[turn failed before completion:
-                                //      …]" assistant note AND persists the
-                                //      session transcript to disk.
+                                //   5. `failed_turn.rs::record_failed_turn`
+                                //      appends the accepted rounds (none for
+                                //      EmptyProviderResponse) PLUS a
+                                //      "[turn failed before completion: …]"
+                                //      assistant note AND persists the session
+                                //      transcript to disk.
                                 //
-                                // After step 4 history ends in:
-                                //   [... prior ..., user_msg, assistant_note]
+                                // After step 5 history ends in:
+                                //   [... prior ..., N_autoloaded, user_msg,
+                                //    assistant_note]
                                 //
-                                // Truncating back to `history_len_before_first`
-                                // drops the user_msg and assistant_note so the
-                                // retry starts from a clean transcript.
+                                // The failed attempt contributed exactly
+                                // user_msg + assistant_note = 2 rows.  Using
+                                // the post-failure length rather than the
+                                // pre-turn snapshot means we truncate back to
+                                // the post-autoload state — the N_autoloaded
+                                // rows (prior durable context) are preserved
+                                // for the retry.
                                 //
-                                // WHY suppress_transcript_autoload is also
-                                // needed: when this is the VERY FIRST turn
-                                // (`history_len_before_first == 0`), truncating
-                                // to 0 makes history empty again. The next
-                                // `turn()` call sees empty history and calls
-                                // `try_load_session_transcript()`, which reads
-                                // back the transcript `record_failed_turn` just
-                                // wrote — re-adding the user message and
-                                // recreating the duplicate. Suppressing the
-                                // autoload closes that path without touching
-                                // any prior-turn history (turns before the
-                                // snapshot are below `history_len_before_first`
-                                // and are unaffected by the truncate).
-                                agent.truncate_history_to(history_len_before_first);
+                                // WHY suppress_transcript_autoload is needed
+                                // only when clean_len == 0: when the retry
+                                // starts with empty history, `turn()` would
+                                // call `try_load_session_transcript()` again
+                                // and pick up the transcript `record_failed_turn`
+                                // just wrote — re-adding the user message and
+                                // recreating the duplicate. When clean_len > 0
+                                // history is non-empty so autoload cannot fire
+                                // anyway, and suppressing it would prevent a
+                                // recovered agent from resuming its durable
+                                // context on the NEXT turn.
+                                let clean_len = agent.history().len().saturating_sub(2);
+                                let mut retry_overrides = overrides;
+                                retry_overrides.suppress_transcript_autoload = clean_len == 0;
+                                agent.set_next_turn_overrides(retry_overrides);
+                                agent.truncate_history_to(clean_len);
                                 let retry_started = std::time::Instant::now();
                                 let second = agent.turn(message).await;
                                 let second_elapsed = retry_started.elapsed();

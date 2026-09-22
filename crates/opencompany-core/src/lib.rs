@@ -7,11 +7,11 @@
 // The default rustc recursion limit (128) is occasionally exhausted by the
 // deeply nested async generator types that arise when evaluating the `Send`
 // bound on the agent-turn future chain. The limit here was raised to 256 when
-// the `history_len_before_first` variable in `run_with_steer` pushed the
+// the empty-retry logic in `run_with_steer` (issue #1871) pushed the
 // evaluator over 128 (E0275 in the test binary). The generated async futures in
 // this crate embed OpenHuman's own generator types which already approach the
 // limit; this gives headroom for future growth without forcing `Box::pin`
-// workarounds on every new field (issue #1871).
+// workarounds on every new field.
 #![recursion_limit = "256"]
 
 pub mod analytics;
