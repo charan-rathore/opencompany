@@ -1914,49 +1914,89 @@ impl CompanyAgent {
                                 // `EmptyProviderResponse`:
                                 //   1. If history is empty, calls
                                 //      `try_load_session_transcript()` — may
-                                //      add N rows from a prior durable
-                                //      transcript.
-                                //   2. Pushes the (enriched) user message
+                                //      load a prior durable transcript into
+                                //      `cached_transcript_messages`, then
+                                //      `absorb_resumed_transcript_prefix()`
+                                //      folds those N rows into `history`
+                                //      during the turn body.
+                                //   2. Builds and pushes the system prompt
+                                //      (first turn only).
+                                //   3. Pushes the (enriched) user message
                                 //      (core_turn.rs line 603).
-                                //   3. Gets a blank completion (no text, no
+                                //   4. Gets a blank completion (no text, no
                                 //      tool calls).
-                                //   4. `harness_turn.rs` pops the dangling
+                                //   5. `harness_turn.rs` pops the dangling
                                 //      empty assistant row (#4457 defect A).
-                                //   5. `failed_turn.rs::record_failed_turn`
+                                //   6. `failed_turn.rs::record_failed_turn`
                                 //      appends the accepted rounds (none for
                                 //      EmptyProviderResponse) PLUS a
                                 //      "[turn failed before completion: …]"
                                 //      assistant note AND persists the session
                                 //      transcript to disk.
                                 //
-                                // After step 5 history ends in:
-                                //   [... prior ..., N_autoloaded, user_msg,
+                                // After step 6 history ends in:
+                                //   [... prior ..., absorbed_rows, user_msg,
                                 //    assistant_note]
                                 //
                                 // The failed attempt contributed exactly
-                                // user_msg + assistant_note = 2 rows.  Using
-                                // the post-failure length rather than the
-                                // pre-turn snapshot means we truncate back to
-                                // the post-autoload state — the N_autoloaded
-                                // rows (prior durable context) are preserved
-                                // for the retry.
+                                // user_msg + assistant_note = 2 rows.  The
+                                // `clean_len` points to where history should
+                                // land for the retry: post-autoload state.
                                 //
-                                // WHY suppress_transcript_autoload is needed
-                                // only when clean_len == 0: when the retry
-                                // starts with empty history, `turn()` would
-                                // call `try_load_session_transcript()` again
-                                // and pick up the transcript `record_failed_turn`
-                                // just wrote — re-adding the user message and
-                                // recreating the duplicate. When clean_len > 0
-                                // history is non-empty so autoload cannot fire
-                                // anyway, and suppressing it would prevent a
-                                // recovered agent from resuming its durable
-                                // context on the NEXT turn.
+                                // Implementation: openhuman exposes
+                                // `clear_history()` and
+                                // `seed_resume_from_messages(pairs, msg)`.
+                                // We save `history[..clean_len]` as
+                                // `(role, content)` pairs (all rows at this
+                                // point are `Chat` variants after
+                                // `absorb_resumed_transcript_prefix` ran),
+                                // clear, then re-seed.  The retry's turn then
+                                // absorbs those pairs back into history via
+                                // the normal resumed-prefix path.
+                                //
+                                // After re-seeding, `cached_transcript_messages`
+                                // is Some, so the autoload guard in
+                                // `try_load_session_transcript` is already
+                                // blocked.  When `to_keep` is empty (no Chat
+                                // rows in `clean_len` — the degenerate all-
+                                // tool-call case) we have nothing to reseed,
+                                // so we must set `suppress_transcript_autoload`
+                                // to prevent picking up the just-written failed
+                                // transcript.
                                 let clean_len = agent.history().len().saturating_sub(2);
+                                let to_keep: Vec<(String, String)> = agent
+                                    .history()
+                                    .iter()
+                                    .take(clean_len)
+                                    .filter_map(|msg| {
+                                        use oh::agent::messages::ConversationMessage;
+                                        if let ConversationMessage::Chat(m) = msg {
+                                            Some((m.role.clone(), m.content.clone()))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                let did_reseed = !to_keep.is_empty();
+                                agent.clear_history();
+                                if did_reseed {
+                                    // Pass an empty current message so the
+                                    // trailing-user-row dedup guard in
+                                    // `seed_resume_from_messages` never fires
+                                    // (the last kept row is always an assistant
+                                    // or system message, not the user's retry
+                                    // message).
+                                    let _ = agent.seed_resume_from_messages(to_keep, "");
+                                }
                                 let mut retry_overrides = overrides;
-                                retry_overrides.suppress_transcript_autoload = clean_len == 0;
+                                // `suppress_transcript_autoload` is only
+                                // needed when we have nothing to reseed — an
+                                // empty `cached_transcript_messages` leaves the
+                                // retry's autoload guard open, and it would
+                                // reload the very failed transcript
+                                // `record_failed_turn` just wrote.
+                                retry_overrides.suppress_transcript_autoload = !did_reseed;
                                 agent.set_next_turn_overrides(retry_overrides);
-                                agent.truncate_history_to(clean_len);
                                 let retry_started = std::time::Instant::now();
                                 let second = agent.turn(message).await;
                                 let second_elapsed = retry_started.elapsed();
