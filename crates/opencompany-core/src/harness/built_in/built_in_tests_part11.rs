@@ -480,7 +480,11 @@ async fn wire_company_agent(
         tenant_search: None,
         workspace: None,
     };
-    let company = crate::ports::types::CompanyId::new("acme");
+    // A fresh id per fixture: one test binary registers this agent many times
+    // over, and a runtime id stays taken while a prior fixture's handle lives.
+    // The same id must carry the workspace seeding, the build, and the
+    // registration, or the agent resolves an empty workspace.
+    let company = crate::ports::CompanyId::new(format!("test-{}", uuid::Uuid::new_v4().simple()));
     let manifest_agent = ManifestAgent {
         provider: None,
         global: false,
@@ -535,9 +539,6 @@ async fn wire_company_agent(
     )
     .await
     .expect("the OpenHuman runtime boots");
-    // A fresh id per fixture: one test binary registers this agent many times
-    // over, and a runtime id stays taken while a prior fixture's handle lives.
-    let company = crate::ports::CompanyId::new(format!("test-{}", uuid::Uuid::new_v4().simple()));
     CompanyAgent::register(
         &runtime,
         &company,
