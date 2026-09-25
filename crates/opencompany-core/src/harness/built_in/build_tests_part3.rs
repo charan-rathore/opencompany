@@ -46,14 +46,13 @@ async fn workspace_git_enabled_checkpoints_a_tool_write() {
         &company,
         "Acme",
         &manifest_agent,
-        policy,
+        std::sync::Arc::new(policy),
         &deps,
         &grants,
         &[],
         &[],
         None,
         false,
-        /* speech_enabled */ false,
     )
     .expect("agent builds");
 
@@ -175,18 +174,16 @@ fn the_tool_iteration_cap_is_uniform_and_not_manifest_configurable() {
             &CompanyId::new("acme"),
             "Acme",
             &manifest_agent,
-            ApprovalPolicy::new(&Policy::default(), None),
+            std::sync::Arc::new(ApprovalPolicy::new(&Policy::default(), None)),
             &deps,
             &["*".to_string()],
             &[],
             &[],
             None,
             is_orchestrator,
-            /* speech_enabled */ false,
         )
         .expect("agent builds")
-        .agent_config()
-        .max_tool_iterations
+        .max_tool_iterations()
     };
 
     for (label, got) in [

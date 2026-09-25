@@ -85,6 +85,7 @@ fn scripted_agent_over_arc(provider: Arc<dyn HarnessModel>) -> (Arc<CompanyAgent
         deep_trace: None,
         workflow_revisions: None,
         approval_requests: ApprovalRequestQueue::default(),
+        approval_parker: None,
         secrets: None,
         web_allowed_domains: Vec::new(),
         capabilities: crate::harness::toolbelt::CapabilityFilter::AllowAll,
@@ -104,7 +105,8 @@ fn scripted_agent_over_arc(provider: Arc<dyn HarnessModel>) -> (Arc<CompanyAgent
         tenant_search: None,
         workspace: None,
     };
-    let roster = build_roster(&record(), &deps, &[], &HashMap::new()).expect("roster");
+    let roster =
+        build_roster(&test_runtime(), &record(), &deps, &[], &HashMap::new()).expect("roster");
     // Keep the tempdir alive for the agent's workspace by leaking it into the
     // test's lifetime — the process ends the test anyway.
     std::mem::forget(dir);
@@ -307,8 +309,7 @@ pub(super) async fn ceo_tool_names(pool: &HarnessPool, id: &CompanyId) -> Vec<St
         .iter()
         .find(|a| a.agent_id == "ceo")
         .expect("ceo present");
-    let agent = ceo.agent.lock().await;
-    agent.tools().iter().map(|t| t.name().to_string()).collect()
+    ceo.tool_names()
 }
 
 /// Builds a `HarnessDeps` carrying the given plan + meter, for the total-
@@ -355,6 +356,7 @@ pub(super) fn deps_with_plan(
         deep_trace: None,
         workflow_revisions: None,
         approval_requests: ApprovalRequestQueue::default(),
+        approval_parker: None,
         secrets: None,
         web_allowed_domains: Vec::new(),
         capabilities: crate::harness::toolbelt::CapabilityFilter::AllowAll,
@@ -502,6 +504,8 @@ pub(super) fn belt(grants: &[&str], is_orchestrator: bool, wire_everything: bool
             enabled: true,
             source: crate::company::mcp::McpSource::Runtime,
             auth: crate::company::mcp::AuthMaterial::None,
+            tool_policies: Default::default(),
+            tool_inventory: Default::default(),
         }];
     }
     let manifest_agent = ManifestAgent {
@@ -531,14 +535,13 @@ pub(super) fn belt(grants: &[&str], is_orchestrator: bool, wire_everything: bool
         &CompanyId::new("acme"),
         "Acme",
         &manifest_agent,
-        policy,
+        std::sync::Arc::new(policy),
         &deps,
         &grants,
         &[],
         &[],
         None,
         is_orchestrator,
-        /* speech_enabled */ false,
     )
     .expect("agent builds");
     agent.tools().iter().map(|t| t.name().to_string()).collect()

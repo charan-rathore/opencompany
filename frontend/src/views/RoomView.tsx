@@ -81,7 +81,9 @@ import { RawTurns } from "./room/RawTurns";
 import { ThreadPanel } from "./room/ThreadPanel";
 import { useLocalScope } from "@/connections/ConnectionContext";
 import * as room from "@/room/store";
-import { foldEpisodes, type EpisodeTurn } from "@/lib/hive/episode";
+import { useEpisodes } from "@/hooks/use-episodes";
+import { withLiveExchanges } from "@/lib/episodes";
+import type { EpisodeFrames } from "@/lib/episode-frames";
 import {
   buildChannels,
   buildTimeline,
@@ -398,6 +400,15 @@ interface Props {
   budgetProximity?: { message: string; atMillis: number } | null;
   /** Clears the banner above — the shell's own state, this view only asks. */
   onDismissBudgetProximity?: () => void;
+  /**
+   * The live half of every desk's episodes, folded by the shell off the SSE
+   * frames (`lib/episode-frames.ts`). Owned there for the reason
+   * `transcripts` is: a round keeps running while the operator is on another
+   * section, and the band has to be right the moment they come back. Absent
+   * — an older shell, a test — the rounds are rebuilt from the transcript
+   * alone, which is every completed episode and none of the live lanes.
+   */
+  episodeFrames?: EpisodeFrames;
 }
 
 const FIRST_TEAM_BRIEF =
@@ -468,6 +479,7 @@ export function RoomView({
   failedApprovals,
   budgetProximity,
   onDismissBudgetProximity,
+  episodeFrames,
 }: Props) {
   /*
    * Read straight from the Room store rather than taken as props.
@@ -484,6 +496,7 @@ export function RoomView({
    * `HISTORY_UNSTARTED`, which spins forever.
    */
   const openTurns = room.useOpenTurns();
+  const liveAgentByTurn = room.useLiveAgentByTurn();
   const liveStepsByThread = room.useLiveStepsByThread();
   const liveStepsByMessage = room.useLiveStepsByMessage();
   const receiptByThread = room.useReceiptByThread();
@@ -631,10 +644,6 @@ export function RoomView({
     setRailOpenSections((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }));
   /** Your own avatar reference, once `loadViewer` has resolved who you are. */
   const [youAvatar, setYouAvatar] = useState<string | undefined>(undefined);
-  const [effectiveHive, setEffectiveHive] = useState<{
-    quorum: number;
-    turnBudget: number;
-  } | null>(null);
 
   /**
    * Ask the host whether this company can think (issues #1734, #1735).
@@ -1337,7 +1346,7 @@ export function RoomView({
     return members.filter((m) => !inside.has(m.id));
   }, [inChannel, members]);
 
-  const messages = useMemo(
+  const transcript = useMemo(
     () => (channel ? (transcripts[channel.id] ?? EMPTY_MESSAGES) : EMPTY_MESSAGES),
     [transcripts, channel?.id],
   );
@@ -1353,6 +1362,17 @@ export function RoomView({
   const historyPending = channel
     ? loadingTeam || !historyReady(hydration, channel.id)
     : false;
+  // Folded from the raw transcript, and then folded back onto it: an
+  // exchange two seats are having is written to their pair channel, so the
+  // rows never reach this desk and only the episode fold has seen them.
+  // Attaching them here means every surface below -- the timeline, the thread
+  // panel -- renders one enriched transcript rather than each learning about
+  // conversations separately.
+  const episodes = useEpisodes(transcript, episodeFrames, channel?.id);
+  const messages = useMemo(
+    () => withLiveExchanges(transcript, episodes),
+    [transcript, episodes],
+  );
   const entries = useMemo(
     () => (channel ? buildTimeline(messages, channel, members, youAvatar) : []),
     [messages, channel, members, youAvatar],
@@ -1426,63 +1446,21 @@ export function RoomView({
   const askerNames = useAskerNames(client, company, channelApprovals);
 
   /**
-   * The rooms this channel held, folded out of its own transcript.
+   * The episodes this channel ran, folded out of its transcript and the live
+   * frames.
    *
-   * Derived rather than fetched: a deliberating desk journals nothing but its
-   * turns, so the transcript **is** the episode and there is no episode endpoint
-   * to ask. See `lib/hive/episode.ts`.
+   * Derived rather than fetched: every committed utterance is an ordinary
+   * reply row carrying `episode`, so the transcript **is** the durable record
+   * and there is no read to make. The frames layer the present tense on top —
+   * which seats a round opened with, which is still working. See
+   * `lib/episodes.ts`.
    *
    * `[]` for every DM, `#general`, the Operator feed and every desk that
-   * answered with one ordinary turn — the fold looks for marker lines and the
-   * reserved `hive-report` author and finds neither. Nothing here consults the
-   * channel's kind, which is what keeps the surface unchanged for every
-   * conversation that is not a room.
+   * answered with one ordinary turn — the fold looks for rows carrying
+   * `episode` and frames naming this desk, and finds neither. Nothing here
+   * consults the channel's kind, which is what keeps the surface unchanged
+   * for every conversation that is not a room.
    */
-  useEffect(() => {
-    let live = true;
-    setEffectiveHive(null);
-    // Lightweight room-test clients and older hosts do not expose this optional
-    // grammar read. The fold retains its derived policy in that case.
-    if (!channel?.memberIds || typeof client.getDeskHive !== "function") return () => {
-      live = false;
-    };
-    client
-      .getDeskHive(channel.id, company)
-      .then((hive) => {
-        if (live) {
-          setEffectiveHive({
-            quorum: hive.effective.quorum,
-            turnBudget: hive.effective.turnBudget,
-          });
-        }
-      })
-      // DMs and system channels have no desk grammar endpoint.
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [client, company, channel?.id, channel?.memberIds]);
-
-  const episodes = useMemo(
-    () =>
-      foldEpisodes(
-        // The complete transcript, not `entries` — `buildTimeline` folds
-        // thread replies out of the main timeline, but hive turns and
-        // `hive-report` messages can themselves be replies to the triggering
-        // operator message, and `entries` would then miss those rows and
-        // render no episode or an incomplete one.
-        messages,
-        // The seat count the host derives its quorum and turn budget from. Only
-        // a hint: with no membership the fold falls back to its own default and
-        // reports the number as derived rather than asserting one it cannot know.
-        {
-          members: channel?.memberIds?.length,
-          quorum: effectiveHive?.quorum,
-          turnBudget: effectiveHive?.turnBudget,
-        },
-      ),
-    [messages, channel?.memberIds, effectiveHive],
-  );
 
   const items = useMemo(
     () =>
@@ -1494,15 +1472,6 @@ export function RoomView({
       ),
     [entries, channelApprovals, settledApprovals, decidedApprovals, episodes],
   );
-
-  /** Each deliberation turn by the message that carried it, for the rows. */
-  const episodeTurn = useMemo(() => {
-    const out: Record<string, EpisodeTurn> = {};
-    for (const episode of episodes)
-      for (const turn of [...episode.turns, ...episode.referrals])
-        out[turn.messageId] = turn;
-    return out;
-  }, [episodes]);
 
   // Company-wide, not scoped to the open channel — see the function's own
   // doc for why a per-channel version silently redeemed the wrong marker
@@ -2904,7 +2873,6 @@ export function RoomView({
                 <MessageTimeline
                   channel={channel}
                   items={items}
-                  episodeTurn={episodeTurn}
                   cognition={cognition}
                   historyPending={historyPending}
                   openThreadId={openThreadId}
@@ -2925,10 +2893,32 @@ export function RoomView({
                   // Thread-panel receipts are out of v1 (issue #1934): excluded here
                   // the same way `liveSteps` is when a thread is open.
                   receipt={openThreadId ? undefined : receipt}
-                  // Who the host expects to answer, for the leg that has no
-                  // receipt to read: a reload keeps the open-turn row and
-                  // nothing else, and the row is what carries this.
-                  turnAgentId={openTurn?.agentId}
+                  // Who is answering, for the leg that has no receipt to read.
+                  //
+                  // The LIVE agent first, falling back to the one the host
+                  // started the turn on. `openTurn.agentId` is set once and
+                  // never revised, so on its own this row named the opening
+                  // responder for the whole turn — through a desk hand-off,
+                  // and through every seat of a deliberating room. The frames
+                  // are what know the floor has moved; `liveAgentByTurn` is
+                  // where they say so. The fallback still covers the reload
+                  // leg, where a re-armed row has no frames of its own yet.
+                  // The thread-keyed half of the live answer — a turn the host
+                  // did not stamp with a `messageSeq` files its rows and its
+                  // agent under the thread, and this is the only place that
+                  // knows the thread id. The query-keyed half is resolved in
+                  // the timeline, beside the rows it belongs to, and overrides
+                  // this: only the timeline knows which bucket is the open
+                  // turn's, and two copies of that precedence is how the name
+                  // and the steps would come to disagree.
+                  //
+                  // `openTurn.agentId` remains the last fallback, for the
+                  // reload leg whose re-armed row has seen no frames yet.
+                  turnAgentId={
+                    (activeThreadId ? liveAgentByTurn?.[activeThreadId] : undefined) ??
+                    openTurn?.agentId
+                  }
+                  liveAgentByTurn={liveAgentByTurn}
                   agentNames={agentNames}
                   onOpenThread={setOpenThreadId}
                   onReact={react}
@@ -3251,6 +3241,15 @@ export function RoomView({
                   // messages never reach the channel timeline — so the panel needs
                   // the per-query rows too, or its turns show nothing at all.
                   liveStepsByMessage={liveStepsByMessage}
+                  // …and what it needs to name the seat working them. Resolved
+                  // in the panel rather than here because only it knows which
+                  // of the thread's messages owns the open bucket.
+                  liveAgentByTurn={liveAgentByTurn}
+                  // The channel's own flag: `threadReplies` is derived from
+                  // `messages` synchronously, so a thread has no fetch of its
+                  // own to be pending on.
+                  historyPending={historyPending}
+                  agentNames={agentNames}
                   sending={sending}
                   mentionables={mentionables}
                   channelMemberIds={inChannel?.map((m) => m.id)}
@@ -3276,6 +3275,23 @@ export function RoomView({
                   onClose={() => setOpenThreadId(null)}
                   typingNames={resolveTypingNames?.(active.id, parent.id) ?? []}
                   openTurn={threadTurn}
+                  // Resolved here, never in the panel: "never a raw id" is one
+                  // rule in one place, the same way the channel pane resolves
+                  // its own row's name.
+                  //
+                  // The live agent first, on the same precedence the channel
+                  // uses. `threadTurn.agentId` is the responder the host
+                  // recorded when the turn started and is never revised, so
+                  // alone it left an open thread naming the opening teammate
+                  // through a hand-off while the channel beside it named the
+                  // current one (tinysweeper on #2423). The recorded responder
+                  // stays the fallback, for the reload leg with no frames yet.
+                  turnAgentName={(() => {
+                    const id =
+                      (threadTurnKey ? liveAgentByTurn?.[threadTurnKey] : undefined) ??
+                      threadTurn?.agentId;
+                    return id ? agentNames?.[id] : undefined;
+                  })()}
                   onTyping={() => onTyping?.(active.id, parent.id)}
                   onRetrySend={retrySend}
                   // A thread is not a lesser transcript (issue #1734): an echoed
