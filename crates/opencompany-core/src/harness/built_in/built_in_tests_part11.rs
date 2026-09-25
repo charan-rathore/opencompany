@@ -283,6 +283,7 @@ async fn a_later_turn_replays_the_durable_rows_with_roles_intact() {
         chat_id: Some("desk-1871-replay"),
         thread_root: None,
         history_seed: true,
+        message_seq: None,
     };
     let (first, _usages) = agent.run_with_steer("hello", None, None, None, chat).await;
     first.expect("first turn recovers");
@@ -576,6 +577,7 @@ async fn typed_tool_rows_survive_the_replay_across_an_empty_retry() {
         chat_id: Some("desk-1871-typed"),
         thread_root: None,
         history_seed: true,
+        message_seq: None,
     };
 
     let marker1 = format!("typed-1871-first-{}", uuid::Uuid::new_v4().simple());

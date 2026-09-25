@@ -405,6 +405,7 @@ impl HarnessModel for AlwaysFailsProvider {
 
 /// One request the scripted provider observed, for tests that assert on what
 /// each individual provider call carried (issue #1871).
+#[derive(Clone)]
 pub(super) struct CapturedCall {
     /// Tool declarations sent with the call.
     pub(super) tools: usize,
