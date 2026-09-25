@@ -608,12 +608,14 @@ async fn typed_tool_rows_survive_the_replay_across_an_empty_retry() {
         .get("messages")
         .and_then(|m| m.as_array())
         .expect("the request carries messages");
-    let role_of = |message: &serde_json::Value| -> &str {
+    // A nested fn, not a closure: elision gives each call its own borrow,
+    // where a closure's inferred lifetime is too tight for the compiler.
+    fn role_of(message: &serde_json::Value) -> &str {
         message
             .get("role")
             .and_then(|role| role.as_str())
             .unwrap_or("")
-    };
+    }
     let count_role = |role: &str| messages.iter().filter(|m| role_of(m) == role).count();
     assert!(
         count_role("system") >= 1,
