@@ -507,9 +507,7 @@ impl ChatModel<()> for ScriptedProvider {
             .map(|message| match message {
                 tinyinference::Message::System(_) => CapturedRole::System,
                 tinyinference::Message::User(_) => CapturedRole::User,
-                tinyinference::Message::Assistant(assistant)
-                    if assistant.tool_calls.is_empty() =>
-                {
+                tinyinference::Message::Assistant(assistant) if assistant.tool_calls.is_empty() => {
                     CapturedRole::Assistant
                 }
                 tinyinference::Message::Assistant(_) => CapturedRole::AssistantToolCalls,

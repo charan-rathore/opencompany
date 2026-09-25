@@ -284,9 +284,7 @@ async fn a_later_turn_replays_the_durable_rows_with_roles_intact() {
         thread_root: None,
         history_seed: true,
     };
-    let (first, _usages) = agent
-        .run_with_steer("hello", None, None, None, chat)
-        .await;
+    let (first, _usages) = agent.run_with_steer("hello", None, None, None, chat).await;
     first.expect("first turn recovers");
     let (second, _usages) = agent
         .run_with_steer("and again", None, None, None, chat)
@@ -331,7 +329,10 @@ async fn a_later_turn_replays_the_durable_rows_with_roles_intact() {
 /// What the scripted model does on each successive call.
 enum WireTurn {
     /// Emit a tool call with these literal arguments.
-    Call { tool: String, args: serde_json::Value },
+    Call {
+        tool: String,
+        args: serde_json::Value,
+    },
     /// Finish the turn with plain assistant text (possibly blank).
     Say(&'static str),
 }
@@ -384,7 +385,9 @@ async fn spawn_wire_script(turns: Vec<WireTurn>) -> (String, Arc<WireScript>) {
                 // than expected; end it with text rather than hanging.
                 let next = next.unwrap_or(WireTurn::Say("ran off the end of the script"));
                 let message = match next {
-                    WireTurn::Say(text) => serde_json::json!({ "role": "assistant", "content": text }),
+                    WireTurn::Say(text) => {
+                        serde_json::json!({ "role": "assistant", "content": text })
+                    }
                     WireTurn::Call { tool, args } => wire_tool_call_message(&tool, &args),
                 };
                 axum::Json(serde_json::json!({
@@ -404,7 +407,11 @@ async fn spawn_wire_script(turns: Vec<WireTurn>) -> (String, Arc<WireScript>) {
 
 /// One real company agent on the scripted endpoint, with `notes` files seeded
 /// in its sandbox so every scripted `file_read` succeeds.
-async fn wire_company_agent(model_url: String, dir: &std::path::Path, notes: usize) -> CompanyAgent {
+async fn wire_company_agent(
+    model_url: String,
+    dir: &std::path::Path,
+    notes: usize,
+) -> CompanyAgent {
     use crate::company::credentials::Credential;
     use crate::company::{Agent as ManifestAgent, Policy};
     use crate::harness::build::{agent_workspace, build_agent};
@@ -530,8 +537,16 @@ async fn wire_company_agent(model_url: String, dir: &std::path::Path, notes: usi
     // A fresh id per fixture: one test binary registers this agent many times
     // over, and a runtime id stays taken while a prior fixture's handle lives.
     let company = crate::ports::CompanyId::new(format!("test-{}", uuid::Uuid::new_v4().simple()));
-    CompanyAgent::register(&runtime, &company, "ceo", "Chief Executive", None, agent, None)
-        .expect("the agent registers")
+    CompanyAgent::register(
+        &runtime,
+        &company,
+        "ceo",
+        "Chief Executive",
+        None,
+        agent,
+        None,
+    )
+    .expect("the agent registers")
 }
 
 /// **Typed rows survive** — a turn that runs a real tool commits
@@ -564,14 +579,10 @@ async fn typed_tool_rows_survive_the_replay_across_an_empty_retry() {
     };
 
     let marker1 = format!("typed-1871-first-{}", uuid::Uuid::new_v4().simple());
-    let (first, _usages) = agent
-        .run_with_steer(&marker1, None, None, None, chat)
-        .await;
+    let (first, _usages) = agent.run_with_steer(&marker1, None, None, None, chat).await;
     first.expect("the tool turn completes");
     let marker2 = format!("typed-1871-second-{}", uuid::Uuid::new_v4().simple());
-    let (second, _usages) = agent
-        .run_with_steer(&marker2, None, None, None, chat)
-        .await;
+    let (second, _usages) = agent.run_with_steer(&marker2, None, None, None, chat).await;
     let second = second.expect("the retried turn recovers");
     assert!(
         second.reply.contains("recovered answer"),
