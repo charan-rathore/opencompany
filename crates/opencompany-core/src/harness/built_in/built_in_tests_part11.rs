@@ -122,10 +122,10 @@ async fn an_empty_retry_keeps_the_same_tool_scope_on_both_attempts() {
     );
     assert_eq!(
         calls[0].tools, calls[1].tools,
-        "tool count must be identical on both attempts: {calls:?}",
+        "the same tool declarations, in the same order, must go out on both attempts: {calls:?}",
     );
     assert!(
-        calls[0].tools > 0,
+        !calls[0].tools.is_empty(),
         "a normal turn must send at least one tool — if this fails the fixture lost its \
          toolbelt and the parity assertion above is vacuous: {calls:?}",
     );

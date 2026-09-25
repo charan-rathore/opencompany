@@ -407,8 +407,8 @@ impl HarnessModel for AlwaysFailsProvider {
 /// each individual provider call carried (issue #1871).
 #[derive(Clone, Debug)]
 pub(super) struct CapturedCall {
-    /// Tool declarations sent with the call.
-    pub(super) tools: usize,
+    /// Tool declaration names sent with the call, in wire order.
+    pub(super) tools: Vec<String>,
     /// The request's message kinds, in wire order.
     pub(super) roles: Vec<CapturedRole>,
 }
@@ -517,7 +517,11 @@ impl ChatModel<()> for ScriptedProvider {
             })
             .collect();
         self.captured.lock().unwrap().push(CapturedCall {
-            tools: _request.tools.len(),
+            tools: _request
+                .tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect(),
             roles,
         });
         let with_usage = |reply: &str| {
