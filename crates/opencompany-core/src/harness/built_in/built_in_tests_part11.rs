@@ -421,6 +421,7 @@ async fn wire_company_agent(
     use crate::store::{FsCompanyStore, FsContextStore};
 
     let deps = HarnessDeps {
+        takeovers: Default::default(),
         emergency_gate: None,
         notifications: None,
         ledgers: None,
@@ -607,7 +608,7 @@ async fn typed_tool_rows_survive_the_replay_across_an_empty_retry() {
         .get("messages")
         .and_then(|m| m.as_array())
         .expect("the request carries messages");
-    let role_of = |message: &serde_json::Value| {
+    let role_of = |message: &serde_json::Value| -> &str {
         message
             .get("role")
             .and_then(|role| role.as_str())
