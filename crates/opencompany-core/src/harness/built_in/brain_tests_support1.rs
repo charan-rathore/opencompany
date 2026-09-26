@@ -4,8 +4,6 @@ use tinyinference::model::{ChatModel, ModelRequest, ModelResponse};
 
 pub(super) use crate::company::CompanyManifest;
 pub(super) use crate::harness::provider::{HarnessModel, MockProvider};
-pub(super) use crate::hivemind::episode::HiveTurnRunner;
-pub(super) use crate::hivemind::referral::HiveReferralRunner;
 pub(super) use crate::ports::brain::CycleHost;
 // Issue #301: every lifecycle return now lands in To-do (the `backlog` pool
 // is gone), so these assertions read the const rather than a literal.
@@ -151,6 +149,7 @@ pub(super) fn brain_over_mock(dir: &std::path::Path) -> HarnessBrain {
 /// (and its `[[harness]]` block) without restating the whole deps literal.
 pub(super) fn brain_over_mock_with(dir: &std::path::Path, record: CompanyRecord) -> HarnessBrain {
     let deps = HarnessDeps {
+        takeovers: Default::default(),
         emergency_gate: None,
         notifications: None,
         ledgers: None,
@@ -184,6 +183,7 @@ pub(super) fn brain_over_mock_with(dir: &std::path::Path, record: CompanyRecord)
         run_output_store: None,
         workflow_revisions: None,
         approval_requests: crate::harness::policy::ApprovalRequestQueue::default(),
+        approval_parker: None,
         secrets: None,
         web_allowed_domains: Vec::new(),
         capabilities: crate::harness::toolbelt::CapabilityFilter::AllowAll,
@@ -310,6 +310,7 @@ pub(super) fn brain_with_tasks_notified_logging(
 ) -> (HarnessBrain, Arc<FsOps>) {
     let tasks = Arc::new(FsOps::new(dir));
     let deps = HarnessDeps {
+        takeovers: Default::default(),
         emergency_gate: None,
         notifications: if notify { Some(tasks.clone()) } else { None },
         ledgers: None,
@@ -343,6 +344,7 @@ pub(super) fn brain_with_tasks_notified_logging(
         run_output_store: None,
         workflow_revisions: None,
         approval_requests: crate::harness::policy::ApprovalRequestQueue::default(),
+        approval_parker: None,
         secrets: None,
         web_allowed_domains: Vec::new(),
         capabilities: crate::harness::toolbelt::CapabilityFilter::AllowAll,
@@ -408,6 +410,7 @@ pub(super) fn brain_with_tasks_and_budget_exhausted_provider(
 ) -> (HarnessBrain, Arc<FsOps>) {
     let tasks = Arc::new(FsOps::new(dir));
     let deps = HarnessDeps {
+        takeovers: Default::default(),
         emergency_gate: None,
         notifications: None,
         ledgers: None,
@@ -441,6 +444,7 @@ pub(super) fn brain_with_tasks_and_budget_exhausted_provider(
         run_output_store: None,
         workflow_revisions: None,
         approval_requests: crate::harness::policy::ApprovalRequestQueue::default(),
+        approval_parker: None,
         secrets: None,
         web_allowed_domains: Vec::new(),
         capabilities: crate::harness::toolbelt::CapabilityFilter::AllowAll,
@@ -538,6 +542,7 @@ pub(super) fn brain_with_injected_artifacts(
     with_workspace: bool,
 ) -> (HarnessBrain, Arc<FsOps>) {
     let deps = HarnessDeps {
+        takeovers: Default::default(),
         emergency_gate: None,
         notifications: None,
         ledgers: None,
@@ -571,6 +576,7 @@ pub(super) fn brain_with_injected_artifacts(
         run_output_store: None,
         workflow_revisions: None,
         approval_requests: crate::harness::policy::ApprovalRequestQueue::default(),
+        approval_parker: None,
         secrets: None,
         web_allowed_domains: Vec::new(),
         capabilities: crate::harness::toolbelt::CapabilityFilter::AllowAll,
