@@ -618,6 +618,53 @@ test('attributeMergeCommits: octopus merge credits both branch parents', () => {
   assert.equal(merge?.primaryPrNumber, null, 'Maintainer (octopus merge) must not hold the PR');
 });
 
+test('attributeMergeCommits: nested merge never overwrites an earlier attribution', () => {
+  // git log order is newest-first, so the OUTER merge (PR #200) is processed
+  // before the INNER merge (PR #100) whose branch it contains. Both merges can
+  // select the same branch commit. Reassigning it to the inner PR would erase
+  // PR #200 from contributor statistics while both merges are cleared.
+  // Instead the first attribution stands, and the inner merge keeps its own PR
+  // through the no-targets fallback.
+  const outerMerge = makeCommit(
+    'mergeOut',
+    'Merge pull request #200 from org/outer-feature',
+    'Maintainer',
+    'm@example.com',
+    { parents: ['base0', 'mergeIn'] },
+  );
+  const innerMerge = makeCommit(
+    'mergeIn',
+    'Merge pull request #100 from org/inner-feature',
+    'Maintainer',
+    'm@example.com',
+    { parents: ['base0', 'branch1'] },
+  );
+  const branchCommit = makeCommit(
+    'branch1',
+    'feat: shared branch work',
+    'Contributor',
+    'c@example.com',
+    { parents: ['base0'] },
+  );
+
+  const fetch = (sha) => (sha === 'mergeOut' || sha === 'mergeIn' ? ['branch1'] : []);
+  // git log emits newest-first: outer merge, then inner merge, then the branch commit.
+  const result = attributeMergeCommits([outerMerge, innerMerge, branchCommit], fetch);
+
+  const branch = result.find((c) => c.sha === 'branch1');
+  const inner = result.find((c) => c.sha === 'mergeIn');
+  const outer = result.find((c) => c.sha === 'mergeOut');
+  assert.equal(branch.primaryPrNumber, 200, 'first (outer) attribution must stand');
+  assert.equal(outer.primaryPrNumber, null, 'outer merge is cleared');
+  assert.equal(inner.primaryPrNumber, 100, 'inner merge keeps PR #100 via the fallback');
+
+  const stats = collectContributorStats(result, new Set());
+  const contributor = stats.find((s) => s.name === 'Contributor');
+  const maintainer = stats.find((s) => s.name === 'Maintainer');
+  assert.deepEqual(contributor?.prs, [200], 'contributor keeps the outer PR');
+  assert.deepEqual(maintainer?.prs, [100], 'PR #100 is preserved, not erased');
+});
+
 // ---------------------------------------------------------------------------
 // Integration test — real git repository, no network access
 // ---------------------------------------------------------------------------
@@ -675,6 +722,62 @@ test('integration: regular merge credits branch author via real git topology', a
     assert.deepEqual(maintainer.prs, [], 'Maintainer must not hold PR #7');
   } finally {
     try { process.chdir(origCwd); } catch { /* ignore */ }
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('integration: octopus merge credits every branch parent via real git topology', async () => {
+  // Exercises the real makeBranchShasFetcher rev-list against an octopus merge:
+  // commits reachable only through the third parent must still be attributed.
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const tmpDir = mkdtempSync(join(tmpdir(), 'oc-release-notes-octopus-'));
+  const origCwd = process.cwd();
+
+  try {
+    const run = (args, opts = {}) =>
+      execFileSync('git', args, { encoding: 'utf8', cwd: tmpDir, ...opts }).trim();
+
+    run(['init', '-b', 'main']);
+    run(['config', 'user.email', 'maintainer@test.invalid']);
+    run(['config', 'user.name', 'Maintainer']);
+
+    run(['commit', '--allow-empty', '-m', 'chore: init']);
+    const fromRef = run(['rev-parse', 'HEAD']);
+
+    run(['checkout', '-b', 'feature-a']);
+    run(['-c', 'user.name=Author A', '-c', 'user.email=a@test.invalid',
+      'commit', '--allow-empty', '-m', 'feat: work on branch a']);
+    run(['checkout', 'main']);
+
+    run(['checkout', '-b', 'feature-b']);
+    run(['-c', 'user.name=Author B', '-c', 'user.email=b@test.invalid',
+      'commit', '--allow-empty', '-m', 'feat: work on branch b']);
+    run(['checkout', 'main']);
+
+    // Three-parent merge: commits from feature-b are reachable only via sha^3.
+    run(['merge', '--no-ff', 'feature-a', 'feature-b',
+      '-m', 'Merge pull request #8 from owner/octopus']);
+    const toRef = run(['rev-parse', 'HEAD']);
+
+    process.chdir(tmpDir);
+    const rawCommits = collectCommits(fromRef, toRef);
+    const commits = attributeMergeCommits(rawCommits, makeBranchShasFetcher());
+    process.chdir(origCwd);
+
+    const stats = collectContributorStats(commits, new Set());
+    const authorA = stats.find((s) => s.name === 'Author A');
+    const authorB = stats.find((s) => s.name === 'Author B');
+    const maintainer = stats.find((s) => s.name === 'Maintainer');
+
+    assert.deepEqual(authorA?.prs, [8], 'Author A must receive PR #8');
+    assert.deepEqual(authorB?.prs, [8], 'Author B (third parent) must receive PR #8');
+    assert.deepEqual(maintainer?.prs ?? [], [], 'Maintainer must not hold PR #8');
+  } finally {
+    process.chdir(origCwd);
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });

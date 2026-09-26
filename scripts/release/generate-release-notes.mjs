@@ -311,7 +311,10 @@ export function collectCommits(from, to, fromRoot = false) {
 //      either unset or already equal to the merge's PR, treat it as a target.
 //      Same-PR branch commits must count: excluding them left the merge uncleared
 //      and double-credited PR N to both the maintainer and the branch author.
-//      A different primaryPrNumber (stacked PR) still excludes the commit.
+//      A different primaryPrNumber (stacked PR) still excludes the commit, as
+//      does a SHA already attributed to a different PR by an earlier merge in
+//      this pass (nested merges): the later merge then keeps its own PR via the
+//      no-targets fallback instead of erasing the earlier attribution.
 //   4. Clear primaryPrNumber on the merge so the maintainer is not credited.
 //      Leave the PR in prNumbers: the only consumer of that field is
 //      uncategorizedCommits (empty prNumbers ⇒ noise bucket). Stripping it
@@ -362,7 +365,13 @@ export function attributeMergeCommits(commits, fetchBranchShas) {
       if (!branch) {
         return false;
       }
-      return !branch.primaryPrNumber || branch.primaryPrNumber === mergePr;
+      // A SHA already attributed by an earlier merge in this pass (nested
+      // merges can share branch commits) must not be reassigned: overwriting
+      // attributed[sha] would erase the earlier PR from contributor statistics
+      // entirely while both merges are cleared.
+      const pendingPr = attributed.get(sha);
+      return (!branch.primaryPrNumber || branch.primaryPrNumber === mergePr)
+        && (pendingPr === undefined || pendingPr === mergePr);
     });
     if (targets.length === 0) {
       // No attributable branch commits found in this range — fall back to
