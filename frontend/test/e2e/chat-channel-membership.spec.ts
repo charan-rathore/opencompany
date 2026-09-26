@@ -98,6 +98,27 @@ async function mockApi(page: Page, mode: () => DesksMode) {
       }
     }
 
+    // GET .../desks/{id}/routing — the "Manage on the org chart" link lands on
+    // `#/company/<deskId>` (issue #485), which mounts `DeskRoutingPanel` under
+    // the focused desk. Unstubbed, that read fell through to the catch-all's
+    // `json([])`, so the panel destructured `effective` off an array and
+    // crashed the whole page — taking the org chart's tree down with it.
+    if (/\/desks\/[^/]+\/routing$/.test(path)) {
+      return json({
+        deskId: path.split("/").at(-2),
+        source: "default",
+        declared: {},
+        effective: {
+          roundWidth: 1,
+          choiceOptionLimit: 5,
+          maxRounds: 8,
+          turnTimeoutSecs: 120,
+          router: "fallback",
+        },
+        candidates: [],
+      });
+    }
+
     if (path.endsWith("/team")) return json(ROSTER);
     if (path.endsWith("/chat")) {
       const body = route.request().postDataJSON() as { text: string; chat?: string; detach?: boolean };
@@ -254,12 +275,10 @@ test("#370 an unknown channel opens the first one and says so", async ({ page })
   // (issue #934), and an unqualified `getByRole("status")` matches both.
   const notice = page.getByRole("status").filter({ hasText: /isn't a channel here/ });
   await expect(notice).toContainText("#does-not-exist");
-  // `#general` rather than `#engineering` since issue #1743: the built-in
-  // company-wide channel is prepended to every company's list, so "the first
-  // one" is now `#general` in every company rather than whichever desk the
-  // host happened to return first. The property under test is unchanged — the
-  // notice names the channel you actually landed in.
-  await expect(notice).toContainText("#general");
+  // General remains directly addressable for legacy history, but is no longer
+  // offered as the default destination (#2368). The notice names the first
+  // offered desk the operator actually landed in.
+  await expect(notice).toContainText("#engineering");
   // The hash is left alone deliberately — rewriting it needs replace-semantics
   // the shell does not thread through yet, and a push would fight the back
   // button. The notice is what closes the gap between URL and content.

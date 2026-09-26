@@ -47,6 +47,7 @@ use axum::Router;
 use axum::routing::{delete, get, post, put};
 
 use crate::AppState;
+use crate::company::McpServer;
 use crate::company::mcp::{McpHealth, McpSource};
 use crate::server::ops::mcp::{McpServerDto, RosterAgentDto};
 use crate::server::ops::scoped;
@@ -74,6 +75,12 @@ pub(super) fn router() -> Router<AppState> {
         ))
         .merge(scoped("/mcp/registry/{server_id}/env", put(update_env)))
         .merge(scoped("/mcp/registry/{server_id}", delete(uninstall)))
+        .merge(scoped(
+            "/mcp/registry/{server_id}/tools/policy",
+            get(read_tool_policy)
+                .put(write_tool_policy)
+                .delete(reset_tool_policy),
+        ))
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +222,40 @@ fn slugify(raw: &str) -> Option<String> {
     }
     let trimmed = out.trim_matches('-');
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// The directory entry as this company's own server declaration.
+///
+/// Lives here rather than beside the route so it compiles and is tested
+/// without the `mcp` feature, like every other rule in this module.
+///
+/// The qualified name is the row's name, which is what the directory, the
+/// console's source badge and a later `PUT …/mcp/servers/{name}` all agree on.
+/// Tool lists are left empty — the directory says nothing about which of a
+/// server's tools this company wants, and an empty pair means "all of them",
+/// which is what an install has always meant.
+///
+/// Its only caller is the route in `wired`, which is `#[cfg(feature = "mcp")]`
+/// — so on a build without that feature the rule is exercised by the tests
+/// below and by nothing else, which is the shape this module is for.
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+pub(super) fn declaration_from_directory(
+    qualified_name: &str,
+    endpoint: &str,
+    description: Option<String>,
+) -> McpServer {
+    McpServer {
+        name: qualified_name.to_string(),
+        endpoint: endpoint.to_string(),
+        description,
+        command: None,
+        allowed_tools: Vec::new(),
+        disallowed_tools: Vec::new(),
+        read_only_tools: Vec::new(),
+        timeout_secs: 30,
+        enabled: true,
+        auth_secret: None,
+    }
 }
 
 /// Folds registry installs into the List A rows, in place.
@@ -387,7 +428,10 @@ pub(in crate::server::ops) mod catalogue;
 #[cfg(feature = "mcp")]
 mod wired;
 #[cfg(feature = "mcp")]
-use wired::{connect_server, disconnect_server, entry, install, search, uninstall, update_env};
+use wired::{
+    connect_server, disconnect_server, entry, install, read_tool_policy, reset_tool_policy, search,
+    uninstall, update_env, write_tool_policy,
+};
 #[cfg(feature = "mcp")]
 pub(super) use wired::{installs, remove_install};
 
@@ -455,10 +499,28 @@ mod unwired {
         let _ = company;
         crate::server::ops::not_wired("mcp registry")
     }
+
+    pub(super) async fn read_tool_policy(company: ScopedCompany) -> Response {
+        let _ = company;
+        crate::server::ops::not_wired("mcp registry")
+    }
+
+    pub(super) async fn write_tool_policy(company: AdminScopedCompany) -> Response {
+        let _ = company;
+        crate::server::ops::not_wired("mcp registry")
+    }
+
+    pub(super) async fn reset_tool_policy(company: AdminScopedCompany) -> Response {
+        let _ = company;
+        crate::server::ops::not_wired("mcp registry")
+    }
 }
 
 #[cfg(not(feature = "mcp"))]
-use unwired::{connect_server, disconnect_server, entry, install, search, uninstall, update_env};
+use unwired::{
+    connect_server, disconnect_server, entry, install, read_tool_policy, reset_tool_policy, search,
+    uninstall, update_env, write_tool_policy,
+};
 #[cfg(not(feature = "mcp"))]
 pub(super) use unwired::{installs, remove_install};
 
