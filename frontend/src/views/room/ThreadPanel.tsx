@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { TriangleAlert, X } from "lucide-react";
 
 import { Markdown } from "@/components/markdown";
@@ -12,11 +13,13 @@ import { BudgetPauseNoticeCard } from "./BudgetPauseNoticeCard";
 import { EchoPlaceholder, echoMarkerFor } from "./EchoPlaceholder";
 import { FailedSendNotice, OutputLinkRow, TurnFailureNotice } from "./MessageRow";
 import { MessageAttachments } from "./MessageAttachments";
-import { AsideConversation, ReferralChip, ReferralConversation } from "./StepTimeline";
+import { AgentConversation, ReferralChip, ReferralConversation, StepTimeline } from "./StepTimeline";
 import { MessageComposer } from "./MessageComposer";
 import { TypingLine } from "./TypingLine";
 import { WorkingIndicator } from "./WorkingIndicator";
 import { channelTitle, formatTime, senderOf, type Channel } from "./model";
+import { JumpToLatest } from "./JumpToLatest";
+import { useBottomAnchor } from "./useBottomAnchor";
 import { type Mention, type Mentionable } from "./mentions";
 
 interface Props {
@@ -30,6 +33,14 @@ interface Props {
   /** The message the thread hangs off. */
   parent: ChatMessage;
   replies: ChatMessage[];
+  /**
+   * The channel's persisted history has not arrived yet, so the absence of
+   * replies is not evidence of anything — the same prop, and the same value,
+   * `MessageTimeline` gets. The anchor below needs it: a panel opened over a
+   * transcript still on the wire would anchor once against a one-screen box
+   * and never run again.
+   */
+  historyPending?: boolean;
   /**
    * The subset of `replies` already laid out inline in the channel, from
    * {@link inlineReplyIds} — excluded from the count above the list, never
@@ -60,6 +71,10 @@ interface Props {
    * with no render path at all (Codex on #2069).
    */
   liveStepsByMessage?: Record<string, TurnStep[]>;
+  /** Live agent per turn bucket — see the resolution beside `openTurnSteps`. */
+  liveAgentByTurn?: Record<string, string>;
+  /** Roster agent id → display name, so no row ever shows a raw id. */
+  agentNames?: Record<string, string>;
   sending: boolean;
   /**
    * Everything an `@` can name here (issue #1645). Drawn from the parent
@@ -175,7 +190,12 @@ interface Props {
    * the shell keyed its open turns per thread rather than per channel; before
    * that there was no way to ask "is *this* thread working".
    */
-  openTurn?: { queued: boolean };
+  openTurn?: { queued: boolean; agentId?: string };
+  /**
+   * The open turn's teammate, already resolved to a display name — never a raw
+   * id, on the same terms as the channel pane's own rule.
+   */
+  turnAgentName?: string;
   /** This console is typing here. Distinct from the main composer's callback
    * so the ping this thread sends carries the thread's own `parentId`. */
   onTyping?: () => void;
@@ -225,8 +245,11 @@ export function ThreadPanel({
   members,
   parent,
   replies,
+  historyPending = false,
   inlineReplyIds,
   liveStepsByMessage,
+  liveAgentByTurn,
+  agentNames,
   sending,
   mentionables,
   channelMemberIds,
@@ -243,6 +266,7 @@ export function ThreadPanel({
   onClose,
   typingNames = [],
   openTurn,
+  turnAgentName,
   onTyping,
   cognition,
   onRedeemBudgetPause,
@@ -256,6 +280,44 @@ export function ThreadPanel({
   const countedReplies = inlineReplyIds
     ? replies.reduce((n, r) => (inlineReplyIds.has(r.id) ? n : n + 1), 0)
     : replies.length;
+  /**
+   * The open turn's rows, for the one indicator at the foot of this panel.
+   *
+   * Newest first over this thread's own lines, so a second question asked in
+   * the thread owns the row while an earlier one keeps its rows bucketed rather
+   * than losing them — the same rule the channel pane applies, over the subset
+   * of messages this panel actually renders.
+   *
+   * Resolved here rather than handed to each line, because position in a
+   * transcript is chronology: a "happening now" row placed back at the asking
+   * message claims the work finished before every reply beneath it, which is
+   * false the moment anything is journaled in between.
+   */
+  const openTurn_ = useMemo(() => {
+    if (!liveStepsByMessage) return undefined;
+    for (let i = replies.length - 1; i >= 0; i -= 1) {
+      const rows = liveStepsByMessage[replies[i].id];
+      if (rows?.length) return { steps: rows, key: replies[i].id };
+    }
+    const rows = liveStepsByMessage[parent.id];
+    return rows?.length ? { steps: rows, key: parent.id } : undefined;
+  }, [liveStepsByMessage, replies, parent.id]);
+  const openTurnSteps = openTurn_?.steps;
+  /**
+   * The teammate on the row, under the **same key the rows came from**.
+   *
+   * `turnAgentName` is resolved upstream from the host's open-turn record,
+   * which a turn the console never sent does not have — and the caller cannot
+   * do this lookup for us, because only this component knows which of the
+   * thread's messages owns the open bucket. Without it the row fell through to
+   * naming the running step, which is the channel's old bug one pane over.
+   */
+  const liveName = openTurn_?.key ? agentNames?.[liveAgentByTurn?.[openTurn_.key] ?? ""] : undefined;
+  const { scroller, content, onScroll, atBottom, jumpToLatest } = useBottomAnchor({
+    key: parent.id,
+    pending: historyPending,
+    growth: [replies.length, openTurnSteps?.length ?? 0, typingNames.length],
+  });
   return (
     <aside className="flex w-96 shrink-0 flex-col border-l bg-background">
       <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
@@ -268,42 +330,55 @@ export function ThreadPanel({
         </Button>
       </header>
 
-      <div className="flex-1 overflow-y-auto">
-        <Line
-          channel={channel}
-          members={members}
-          message={parent}
-          liveSteps={liveStepsByMessage?.[parent.id]}
-          youAvatar={youAvatar}
-          resolveAttachmentUrl={resolveAttachmentUrl}
-          cognition={cognition}
-          onRedeemBudgetPause={onRedeemBudgetPause}
-          redeemingBudgetPauseAgent={redeemingBudgetPauseAgent}
-          latestBudgetPauseMessageIdByAgent={latestBudgetPauseMessageIdByAgent}
-          onRetrySend={onRetrySend}
-        />
-        <div className="flex items-center gap-2 px-4 py-2">
-          <span className="text-xs font-medium text-muted-foreground">
-            {countedReplies} {countedReplies === 1 ? "reply" : "replies"}
-          </span>
-          <span className="h-px flex-1 bg-border" aria-hidden />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={scroller}
+          onScroll={onScroll}
+          data-testid="thread-transcript"
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          {/* The column rule 2b's `ResizeObserver` watches. The rows were direct
+              children of the scroller, whose own border box never changes when
+              content overflows it — so without a wrapper of their own there is
+              nothing whose height the rows determine. */}
+          <div ref={content}>
+            <Line
+              channel={channel}
+              members={members}
+              message={parent}
+              youAvatar={youAvatar}
+              resolveAttachmentUrl={resolveAttachmentUrl}
+              cognition={cognition}
+              onRedeemBudgetPause={onRedeemBudgetPause}
+              redeemingBudgetPauseAgent={redeemingBudgetPauseAgent}
+              latestBudgetPauseMessageIdByAgent={latestBudgetPauseMessageIdByAgent}
+              onRetrySend={onRetrySend}
+              agentNames={agentNames}
+            />
+            <div className="flex items-center gap-2 px-4 py-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                {countedReplies} {countedReplies === 1 ? "reply" : "replies"}
+              </span>
+              <span className="h-px flex-1 bg-border" aria-hidden />
+            </div>
+            {replies.map((r) => (
+              <Line
+                key={r.id}
+                channel={channel}
+                members={members}
+                message={r}
+                youAvatar={youAvatar}
+                resolveAttachmentUrl={resolveAttachmentUrl}
+                cognition={cognition}
+                onRedeemBudgetPause={onRedeemBudgetPause}
+                redeemingBudgetPauseAgent={redeemingBudgetPauseAgent}
+                onRetrySend={onRetrySend}
+                latestBudgetPauseMessageIdByAgent={latestBudgetPauseMessageIdByAgent}
+                agentNames={agentNames}
+              />
+            ))}
+          </div>
         </div>
-        {replies.map((r) => (
-          <Line
-            key={r.id}
-            channel={channel}
-            members={members}
-            message={r}
-            liveSteps={liveStepsByMessage?.[r.id]}
-            youAvatar={youAvatar}
-            resolveAttachmentUrl={resolveAttachmentUrl}
-            cognition={cognition}
-            onRedeemBudgetPause={onRedeemBudgetPause}
-            redeemingBudgetPauseAgent={redeemingBudgetPauseAgent}
-            onRetrySend={onRetrySend}
-            latestBudgetPauseMessageIdByAgent={latestBudgetPauseMessageIdByAgent}
-          />
-        ))}
+        {!atBottom && <JumpToLatest onClick={jumpToLatest} />}
       </div>
 
       {/* A read-only thread gets the notice and no composer, the way its
@@ -332,12 +407,23 @@ export function ThreadPanel({
         </p>
       ) : (
         <>
-          {openTurn && (
+          {(openTurn || !!openTurnSteps?.length) && (
             <div className="px-4 py-2">
+              {/* Named, not blind. The rows used to render against each line
+                  in the body while this row said only "Replying…" — so the
+                  panel showed the work in the past tense of its position and
+                  the presence in the present tense of its wording. One row,
+                  at the foot, carrying both. */}
               <WorkingIndicator
-                srLabel={openTurn.queued ? "Queued…" : "Replying…"}
-                queued={openTurn.queued}
+                srLabel={openTurn?.queued ? "Queued…" : "Replying…"}
+                steps={openTurnSteps}
+                name={liveName ?? turnAgentName}
+                queued={openTurn?.queued}
               />
+              {/* …and what it has done, the same pair the channel shows. The
+                  line names the teammate and stops; this names the call in
+                  flight in its own summary. */}
+              {!!openTurnSteps?.length && <StepTimeline steps={[...openTurnSteps]} />}
             </div>
           )}
           <TypingLine names={typingNames} />
@@ -400,7 +486,6 @@ function Line({
   channel,
   members,
   message,
-  liveSteps,
   youAvatar,
   resolveAttachmentUrl,
   cognition,
@@ -408,12 +493,11 @@ function Line({
   redeemingBudgetPauseAgent,
   latestBudgetPauseMessageIdByAgent,
   onRetrySend,
+  agentNames,
 }: {
   channel: Channel;
   members: TeamMember[];
   message: ChatMessage;
-  /** This message's in-flight turn rows, if one is running (see `MessageRow`). */
-  liveSteps?: readonly TurnStep[];
   youAvatar?: string;
   resolveAttachmentUrl?: (nodeId: string) => Promise<string>;
   cognition?: CognitionState | null;
@@ -421,6 +505,7 @@ function Line({
   redeemingBudgetPauseAgent?: string | null;
   latestBudgetPauseMessageIdByAgent?: Map<string, string>;
   onRetrySend?: (messageId: string) => void;
+  agentNames?: Record<string, string>;
 }) {
   // Four arguments, not three: `youAvatar` is the last parameter, and omitting
   // it left your own line with no avatar to seed from but the name "You" —
@@ -519,9 +604,6 @@ function Line({
         {message.outputs && message.outputs.length > 0 && (
           <OutputLinkRow outputs={message.outputs} />
         )}
-        {!!liveSteps?.length && (
-          <WorkingIndicator srLabel="Working…" steps={liveSteps} />
-        )}
         {/* And the crossings, for the same reason the steps are here: a room's
             turns are threaded, so this panel is the only surface a deliberating
             desk's line has. Rendered only here would be a channel-only feature
@@ -535,14 +617,19 @@ function Line({
             direct={message.referredFrom.direct}
             sequence={message.referredFrom.sequence}
             direction={message.referredFrom.direction ?? "asked"}
+            agentNames={agentNames}
           />
         )}
         {message.referralConversation && (
-          <ReferralConversation crossing={message.referralConversation} rowId={message.id} />
+          <ReferralConversation
+            crossing={message.referralConversation}
+            rowId={message.id}
+            agentNames={agentNames}
+          />
         )}
-        {message.asideConversation && (
-          <AsideConversation aside={message.asideConversation} />
-        )}
+        {message.agentConversations?.map((exchange) => (
+          <AgentConversation key={exchange.root} exchange={exchange} agentNames={agentNames} />
+        ))}
       </div>
     </div>
   );

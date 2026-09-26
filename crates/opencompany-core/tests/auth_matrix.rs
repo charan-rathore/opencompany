@@ -653,6 +653,21 @@ const OPS_SCOPED_ROUTES: &[Route] = &[
         Credential,
         ""
     ),
+    r!(
+        Get,
+        "/mcp/servers/{name}/tools/policy",
+        Scoped,
+        Ordinary,
+        "Members may read what a tool call does; only an admin decides it."
+    ),
+    r!(Put, "/mcp/servers/{name}/tools/policy", Admin, Ordinary, ""),
+    r!(
+        Delete,
+        "/mcp/servers/{name}/tools/policy",
+        Admin,
+        Ordinary,
+        ""
+    ),
     r!(Get, "/mcp/config", Scoped, Ordinary, ""),
     r!(Put, "/mcp/config", Admin, Credential, ""),
     r!(Get, "/mcp/registry/search", Scoped, Ordinary, ""),
@@ -674,6 +689,27 @@ const OPS_SCOPED_ROUTES: &[Route] = &[
     ),
     r!(Put, "/mcp/registry/{server_id}/env", Admin, Credential, ""),
     r!(Delete, "/mcp/registry/{server_id}", Admin, Credential, ""),
+    r!(
+        Get,
+        "/mcp/registry/{server_id}/tools/policy",
+        Scoped,
+        Ordinary,
+        "Members may read what a tool call does; only an admin decides it."
+    ),
+    r!(
+        Put,
+        "/mcp/registry/{server_id}/tools/policy",
+        Admin,
+        Ordinary,
+        ""
+    ),
+    r!(
+        Delete,
+        "/mcp/registry/{server_id}/tools/policy",
+        Admin,
+        Ordinary,
+        ""
+    ),
     r!(Post, "/memory", Scoped, Ordinary, ""),
     r!(Get, "/memory", Scoped, Ordinary, ""),
     r!(Get, "/memory/traces", Scoped, Ordinary, ""),
@@ -1148,40 +1184,53 @@ const OPERATOR_AUTHORITY_ROUTES: &[Route] = &[
     },
     Route {
         method: Verb::Get,
-        path: "/desks/{desk_id}/hive",
+        path: "/desks/{desk_id}/routing",
         address: Address::Dual,
         source: Source::Operator,
         access: Access::Scoped,
         features: &["openhuman"],
         blast: Blast::Authority,
         probe: Probe::Empty,
-        note: "Members may read the move grammar in force on a desk.",
+        note: "Members may read the routing policy in force on a desk.",
         wait: Wait::None,
         red_cells: RedCells::None,
     },
     Route {
         method: Verb::Put,
-        path: "/desks/{desk_id}/hive",
+        path: "/desks/{desk_id}/routing",
         address: Address::Dual,
         source: Source::Operator,
         access: Access::Scoped,
         features: &["openhuman"],
         blast: Blast::Authority,
         probe: Probe::Json(r#"{}"#),
-        note: "Members may install or replace a desk's move grammar.",
+        note: "Members may install or replace a desk's routing overlay.",
         wait: Wait::None,
         red_cells: RedCells::None,
     },
     Route {
         method: Verb::Delete,
-        path: "/desks/{desk_id}/hive",
+        path: "/desks/{desk_id}/routing",
         address: Address::Dual,
         source: Source::Operator,
         access: Access::Scoped,
         features: &["openhuman"],
         blast: Blast::Authority,
         probe: Probe::Empty,
-        note: "Members may drop a desk's installed grammar and fall back to the manifest.",
+        note: "Members may drop a desk's routing overlay and fall back to the manifest.",
+        wait: Wait::None,
+        red_cells: RedCells::None,
+    },
+    Route {
+        method: Verb::Get,
+        path: "/episodes",
+        address: Address::Dual,
+        source: Source::Operator,
+        access: Access::Scoped,
+        features: &["openhuman"],
+        blast: Blast::Ordinary,
+        probe: Probe::Empty,
+        note: "Members may list the episodes the company's desks ran or are running.",
         wait: Wait::None,
         red_cells: RedCells::None,
     },
@@ -1757,35 +1806,35 @@ async fn company_status_temp_password_boundary_waits_for_an_assigned_branch() {
 
 #[test]
 fn table_counts_and_intentional_widenings_are_explicit() {
-    assert_eq!(OPS_SCOPED_ROUTES.len(), 210);
+    assert_eq!(OPS_SCOPED_ROUTES.len(), 216);
     assert_eq!(
         OPS_SCOPED_ROUTES
             .iter()
             .map(|route| route.path)
             .collect::<BTreeSet<_>>()
             .len(),
-        165,
+        167,
     );
     assert_eq!(OPS_EXACT_ROUTES.len(), 3);
     assert_eq!(
         OPS_SCOPED_ROUTES.len() * 2,
-        420,
+        432,
         "dual-address ops route-method rows",
     );
     assert_eq!(
         OPS_SCOPED_ROUTES.len() * 2 + OPS_EXACT_ROUTES.len(),
-        423,
+        435,
         "complete ops route-method rows",
     );
     assert_eq!(EXTERNAL_AUTHORITY_ROUTES.len(), 4);
     assert_eq!(OVERLAPPING_EXTERNAL_ROUTES.len(), 1);
-    assert_eq!(OPERATOR_AUTHORITY_ROUTES.len(), 16);
+    assert_eq!(OPERATOR_AUTHORITY_ROUTES.len(), 17);
     assert_eq!(OPERATOR_DIRECT_ROUTES.len(), 13);
     assert_eq!(
         all_routes()
             .map(|route| route_patterns(route).len())
             .sum::<usize>(),
-        473,
+        487,
         "concrete route-method rows",
     );
     assert_eq!(
@@ -1793,10 +1842,10 @@ fn table_counts_and_intentional_widenings_are_explicit() {
             .flat_map(route_patterns)
             .collect::<BTreeSet<_>>()
             .len(),
-        376,
+        382,
         "concrete paths",
     );
-    assert_eq!(render_snapshot().lines().count(), 3_311);
+    assert_eq!(render_snapshot().lines().count(), 3_409);
     assert_eq!(
         all_routes()
             .map(|route| {
@@ -1815,8 +1864,8 @@ fn table_counts_and_intentional_widenings_are_explicit() {
             .iter()
             .filter(|route| route.access == Access::Admin)
             .count(),
-        79,
-        "64 signature-admin, seven body-admin, and eight aspirational authority rows",
+        83,
+        "68 signature-admin, seven body-admin, and eight aspirational authority rows",
     );
     assert_eq!(
         OPS_SCOPED_ROUTES

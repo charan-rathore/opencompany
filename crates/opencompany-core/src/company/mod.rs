@@ -80,6 +80,11 @@ pub mod mcp;
 /// rather than starting with an empty tool surface somebody has to fill in by
 /// hand from the console before the company can do anything.
 pub mod mcp_file;
+/// Per-tool approval policy for MCP servers: the tier vocabulary, the
+/// operator's stored overrides, and the ladder that resolves one from the
+/// other. Ungated — the console route that edits a policy ships without the
+/// harness, and the gate that enforces one ships with it.
+pub mod mcp_policy;
 pub mod paypal;
 // Console MCP OAuth (issue #90): discovery + PKCE + DCR + token exchange for the
 // per-tenant browser sign-in flow. Needs the vendored `oh::mcp::config_servers` discovery
@@ -189,7 +194,6 @@ use std::path::Path;
 
 pub use credentials::{Credential, CredentialSource, TinyhumansTokenSource, TokenTier};
 pub use ledger_file::{LEDGERS_DIR, has_ledger_files, load_dir_ledgers};
-pub(crate) use manifest::hive_problems;
 /// The roster-id grammar check, shared with the runtime id minter so a slug and
 /// a hand-authored `[[agent]].id` are held to one rule (issue #686). Not `pub`:
 /// outside the crate the validator speaks through `CompanyManifest::validate`.

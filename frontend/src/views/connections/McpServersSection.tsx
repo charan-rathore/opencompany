@@ -14,6 +14,7 @@ import {
   PowerOff,
   RefreshCw,
   Server,
+  ShieldCheck,
   Trash2,
   Unplug,
   Wrench,
@@ -62,6 +63,16 @@ import {
   registryOutage,
 } from "@/lib/mcp-registry";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -69,6 +80,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { McpIconButton } from "@/views/mcp/McpIconButton";
+import { McpToolPermissions } from "@/views/mcp/McpToolPermissions";
+import { useHashParam } from "@/hooks/use-hash-param";
 import { McpRegistryBrowser } from "@/views/connections/McpRegistryBrowser";
 import { ProviderDetail } from "@/views/connections/ProviderDetail";
 
@@ -216,6 +229,10 @@ export function McpServersSection({
   // click can't spawn a second overlapping poll. Cleared on unmount so stale
   // callbacks don't fire against a gone component.
   const pollTimers = useRef<Record<string, number>>({});
+  // The row whose tool permissions are open, carried in the address so the
+  // panel is linkable (issue #2373). A name rather than the row, for the same
+  // reason `opened` is one.
+  const [permissionsFor, setPermissionsFor] = useHashParam("permissions");
   // The name of the server whose detail panel is open, or `null` (issue #821).
   // A name rather than the row itself, so an open panel re-derives from
   // `servers` after a refresh instead of showing the row as it was when clicked.
@@ -271,9 +288,26 @@ export function McpServersSection({
   const [token, setToken] = useState("");
   const [authKind, setAuthKind] = useState<McpAuthKind>("bearer");
   const [authFieldName, setAuthFieldName] = useState("");
-  // The add flow's failure is a PERSISTENT inline alert (not a transient toast):
+  // The add flow's outcome is a PERSISTENT inline alert (not a transient toast):
   // a silent-fail auth error is exactly the bug this cell fixes.
-  const [addError, setAddError] = useState<string | null>(null);
+  //
+  // `added` separates the two outcomes that share this banner. A probe that
+  // fails is not a rollback — the server IS saved, enabled and attached to
+  // every agent that reaches it — so titling it the way a real failure is
+  // titled tells the operator the opposite of what happened, and invites them
+  // to add it again.
+  const [addError, setAddError] = useState<{
+    message: string;
+    added: boolean;
+    /** Which server it is about, on the outcomes that left one behind. */
+    server?: string;
+  } | null>(null);
+  // Removal is irreversible and takes the server's stored credential with it,
+  // so it is asked rather than done on the press.
+  const [pendingRemoval, setPendingRemoval] = useState<McpServer | null>(null);
+  // Bumped per server whenever a probe rewrote its stored tool inventory, so an
+  // open permissions panel re-reads instead of rendering the pre-probe list.
+  const [probedAt, setProbedAt] = useState<Record<string, number>>({});
 
   const refresh = useCallback(async () => {
     const mine = scope.current;
@@ -337,15 +371,20 @@ export function McpServersSection({
     if (busy) return;
     setAddError(null);
     if (!name.trim() || !endpoint.trim()) {
-      setAddError("A server needs a name and an https endpoint.");
+      setAddError({
+        message: "A server needs a name and an https endpoint.",
+        added: false,
+      });
       return;
     }
     if (authKind !== "bearer" && token.trim() && !authFieldName.trim()) {
-      setAddError(
-        authKind === "header"
-          ? "A custom-header credential needs a header name."
-          : "A query-parameter credential needs a parameter name.",
-      );
+      setAddError({
+        message:
+          authKind === "header"
+            ? "A custom-header credential needs a header name."
+            : "A query-parameter credential needs a parameter name.",
+        added: false,
+      });
       return;
     }
     setBusy("add");
@@ -373,9 +412,13 @@ export function McpServersSection({
         res.test.authHint !== "oauth_required" &&
         res.test.authHint !== "static_token_required"
       ) {
-        setAddError(res.test.message);
+        setAddError({
+          message: res.test.message,
+          added: true,
+          server: res.server.name,
+        });
       } else if (res.warning) {
-        setAddError(res.warning);
+        setAddError({ message: res.warning, added: true, server: res.server.name });
       } else {
         // The success path has to agree with the banner (issue #567): a toast
         // promising pickup, fired at the moment the operator acts, undoes a
@@ -389,9 +432,11 @@ export function McpServersSection({
       await refresh();
     } catch (err) {
       // Persistent, not a toast: the operator must see why the add failed.
-      setAddError(
-        err instanceof ApiError ? err.message : "Couldn't add the server.",
-      );
+      setAddError({
+        message:
+          err instanceof ApiError ? err.message : "Couldn't add the server.",
+        added: false,
+      });
     } finally {
       setBusy(null);
     }
@@ -403,6 +448,7 @@ export function McpServersSection({
     try {
       const health = await testMcpServer(client, company, server.name);
       setTested((t) => ({ ...t, [server.name]: health }));
+      setProbedAt((p) => ({ ...p, [server.name]: Date.now() }));
     } catch (err) {
       if (err instanceof ApiError && err.code === "not_wired") {
         toast.message(
@@ -575,6 +621,15 @@ export function McpServersSection({
         await removeMcpServer(client, company, removal.name);
       }
       toast.success(`Removed ${server.name}.`);
+      // The add banner outlives its subject otherwise: it is the only thing on
+      // screen still asserting something about a server that no longer exists.
+      // Only that one, though. A banner naming a different server still has a
+      // subject, and a refusal never named one — it reports an add that left
+      // nothing behind, which removing something else does not answer. Both
+      // clear on the next add attempt.
+      setAddError((current) =>
+        current?.added && current.server === server.name ? null : current,
+      );
       await refresh();
     } catch (err) {
       if (err instanceof ApiError && err.code === "not_wired") {
@@ -1060,6 +1115,21 @@ export function McpServersSection({
                               }
                             />
                           )}
+                          <McpIconButton
+                            label={
+                              permissionsFor === server.name
+                                ? `Hide ${server.name}'s tool permissions`
+                                : `Tool permissions for ${server.name}`
+                            }
+                            icon={ShieldCheck}
+                            testId="mcp-permissions"
+                            disabled={busy !== null}
+                            onClick={() =>
+                              setPermissionsFor(
+                                permissionsFor === server.name ? null : server.name,
+                              )
+                            }
+                          />
                           {controls.removal.kind !== "none" && canManage && (
                             <McpIconButton
                               label={`Remove ${server.name}`}
@@ -1067,7 +1137,7 @@ export function McpServersSection({
                               tone="destructive"
                               testId="mcp-remove"
                               disabled={busy !== null}
-                              onClick={() => void remove(server)}
+                              onClick={() => setPendingRemoval(server)}
                             />
                           )}
                         </span>
@@ -1133,6 +1203,16 @@ export function McpServersSection({
                         >
                           {REGISTRY_OAUTH_UNSUPPORTED_NOTICE}
                         </p>
+                      )}
+                      {permissionsFor === server.name && (
+                        <McpToolPermissions
+                          client={client}
+                          company={company}
+                          server={server}
+                          canManage={canManage}
+                          reloadKey={probedAt[server.name] ?? 0}
+                          onClose={() => setPermissionsFor(null)}
+                        />
                       )}
                       {credentialFor === server.name && canManage && (
                         <div
@@ -1293,11 +1373,55 @@ export function McpServersSection({
                 deliberately leaves those open. */}
             {canManage && (
               <div className="space-y-2 border-t border-border pt-3">
+                <AlertDialog
+                  open={pendingRemoval !== null}
+                  onOpenChange={(open) => !open && setPendingRemoval(null)}
+                >
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>
+                        Remove {pendingRemoval?.name}?
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Its agents stop seeing this server&apos;s tools on their
+                        next turn, and the stored credential goes with it — a
+                        token is never shown again, so adding the server back
+                        means pasting a new one.
+                      </AlertDialogDescription>
+                      <AlertDialogDescription>
+                        Its per-tool permissions are removed too.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={busy !== null}>
+                        Keep it
+                      </AlertDialogCancel>
+                      <AlertDialogAction
+                        disabled={busy !== null}
+                        onClick={() => {
+                          const server = pendingRemoval;
+                          setPendingRemoval(null);
+                          if (server) void remove(server);
+                        }}
+                      >
+                        Remove
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
                 {addError && (
-                  <Alert variant="destructive">
+                  <Alert variant={addError.added ? "default" : "destructive"}>
                     <AlertTriangle className="size-4" />
-                    <AlertTitle>Couldn&apos;t add the server</AlertTitle>
-                    <AlertDescription>{addError}</AlertDescription>
+                    <AlertTitle>
+                      {addError.added
+                        ? "Added, but it could not be reached"
+                        : "Couldn't add the server"}
+                    </AlertTitle>
+                    <AlertDescription>
+                      {addError.message}
+                      {addError.added &&
+                        " It is saved and listed above — fix it there, or remove it."}
+                    </AlertDescription>
                   </Alert>
                 )}
                 <div className="grid gap-2 sm:grid-cols-2 sm:items-end">
