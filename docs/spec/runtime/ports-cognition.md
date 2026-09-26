@@ -233,9 +233,8 @@ route-specific:
 Every implementation of the old `inbound()` stream returned `stream::empty()`;
 the method was dead. It remains only as a **deprecated default** that still
 returns an empty stream, so out-of-tree implementers keep compiling. Delivery
-mechanisms vary by implementation: `OperatorChannel` appends to the event log,
-`DeskChannel` does the same, and `OpenHumanChannelAdapter` dispatches over
-JSON-RPC.
+mechanisms vary by implementation: `OperatorChannel` and `DeskChannel` both
+append to the event log.
 
 **API migration (issue #1958):** prefer removing any `inbound()` override and
 never call the method. The trait default preserves source compatibility; there
