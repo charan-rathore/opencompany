@@ -143,4 +143,38 @@ describe("folder traversal failures", () => {
     expect(toast.success).not.toHaveBeenCalled();
     expect(postForm).not.toHaveBeenCalled();
   });
+  it("reports a file-read error before uploading any other files", async () => {
+    const postForm = vi.fn(async () => ({ items: [] }));
+    const client = { scopeFor: () => "/api/v1/company/acme", postForm, post: vi.fn() } as unknown as OpenCompanyClient;
+    await show(client, false);
+    await act(async () => {
+      const event = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", { value: {
+        items: [{ kind: "file", webkitGetAsEntry: () => ({ isFile: true, isDirectory: false, name: "secret.txt", file: (_success: unknown, failure: (error: DOMException) => void) => failure(new DOMException("Permission denied", "NotReadableError")) }) }],
+        files: [], getData: () => "",
+      } });
+      dropzone().dispatchEvent(event);
+      for (let i = 0; i < 15; i++) await Promise.resolve();
+    });
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("secret.txt"));
+    expect(postForm).not.toHaveBeenCalled();
+  });
+
+  it("does not traverse ignored directories", async () => {
+    const read = vi.fn();
+    const client = { scopeFor: () => "/api/v1/company/acme", postForm: vi.fn(), post: vi.fn() } as unknown as OpenCompanyClient;
+    await show(client, false);
+    await act(async () => {
+      const event = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", { value: {
+        items: [{ kind: "file", webkitGetAsEntry: () => ({ isFile: false, isDirectory: true, name: ".git", createReader: read }) }],
+        files: [], getData: () => "",
+      } });
+      dropzone().dispatchEvent(event);
+      for (let i = 0; i < 15; i++) await Promise.resolve();
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("nothing in that drop could be read");
+  });
+
 });
