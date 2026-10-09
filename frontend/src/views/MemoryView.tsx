@@ -664,16 +664,21 @@ function AddLearningPanel({
   const [kind, setKind] = useState<LearningKind>("fact");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const editRevision = useRef(0);
 
   async function submit() {
     if (!text.trim()) return;
     setBusy(true);
+    const submittedRevision = editRevision.current;
     try {
       await onAdd({ kind, text: text.trim() });
       // Nothing closes, so the form resets explicitly — text left standing
       // after a successful save reads as work that has not been saved yet.
-      setKind("fact");
-      setText("");
+      // Only clear the fields that were saved, never edits made during the write.
+      if (editRevision.current === submittedRevision) {
+        setKind("fact");
+        setText("");
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "could not save the learning");
     } finally {
@@ -696,7 +701,12 @@ function AddLearningPanel({
           <Label htmlFor="mem-kind">Kind</Label>
           <Select
             value={kind}
-            onValueChange={(v) => v && setKind(v as LearningKind)}
+            onValueChange={(v) => {
+              if (v) {
+                editRevision.current++;
+                setKind(v as LearningKind);
+              }
+            }}
             items={LEARNING_KIND_LABELS}
           >
             <SelectTrigger id="mem-kind" className="w-full">
@@ -718,7 +728,10 @@ function AddLearningPanel({
             data-testid="memory-text"
             rows={3}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              editRevision.current++;
+              setText(e.target.value);
+            }}
             placeholder="e.g. The client prefers Friday reviews."
           />
         </div>
