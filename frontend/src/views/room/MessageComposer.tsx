@@ -593,7 +593,9 @@ export function MessageComposer({
         return;
       }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    // An Enter that confirms an IME candidate still carries isComposing —
+    // it finishes the composition, it does not send the half-written draft.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       send();
     }

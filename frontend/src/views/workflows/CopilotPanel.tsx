@@ -729,8 +729,9 @@ export function CopilotPanel({
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             // Enter sends, Shift+Enter breaks the line — the convention the
-            // company chat composer already uses.
-            if (e.key === "Enter" && !e.shiftKey) {
+            // company chat composer already uses. An Enter that confirms an
+            // IME candidate (isComposing) does neither.
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void send();
             }

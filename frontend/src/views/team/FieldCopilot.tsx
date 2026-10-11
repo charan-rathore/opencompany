@@ -347,8 +347,9 @@ export function FieldCopilot({
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             // Enter sends, Shift+Enter breaks the line — the convention every
-            // composer in this console follows.
-            if (e.key === "Enter" && !e.shiftKey) {
+            // composer in this console follows. An Enter that confirms an IME
+            // candidate (isComposing) does neither.
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               if (input.trim()) void run(input.trim());
             }

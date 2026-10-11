@@ -2612,8 +2612,9 @@ export function DiscussionTab({
           onKeyDown={(e) => {
             // Enter posts; Shift+Enter is a newline. A note about a task is
             // usually one line, and the mouse trip for every one of them is
-            // what stops people writing them down at all.
-            if (e.key === "Enter" && !e.shiftKey) {
+            // what stops people writing them down at all. An Enter confirming
+            // an IME candidate (isComposing) does neither.
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void post();
             }
