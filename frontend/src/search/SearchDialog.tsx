@@ -81,6 +81,11 @@ export function SearchDialog({
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    // An Enter (or arrow, or Escape) that confirms or navigates an IME
+    // candidate still carries isComposing — leave it to the composition,
+    // or confirming "かな" would jump to whatever result happened to be
+    // highlighted and close the palette mid-word.
+    if (event.nativeEvent.isComposing) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setCursor((at) => (flat.length === 0 ? 0 : (at + 1) % flat.length));
