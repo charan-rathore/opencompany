@@ -82,7 +82,6 @@ import {
   type TaskTab,
 } from "@/lib/task-output";
 import { useAskerNames } from "@/components/approval-card";
-import { useImeEnter } from "@/hooks/use-ime-enter";
 import { ApprovalRow } from "@/views/room/ApprovalRow";
 import type { DecidedApproval } from "@/views/room/model";
 import {
@@ -2345,7 +2344,6 @@ export function DiscussionTab({
   onPosted: () => Promise<void>;
 }) {
   const [text, setText] = useState("");
-  const imeEnter = useImeEnter();
   const [busy, setBusy] = useState(false);
   /**
    * The `seq` of the message currently being withdrawn, or `null`.
@@ -2611,15 +2609,11 @@ export function DiscussionTab({
           // rewrote. The counter and the disabled Post below say what is wrong
           // while the words are still on the screen to fix.
           onChange={(e) => setText(e.target.value)}
-          onCompositionEnd={imeEnter.onCompositionEnd}
           onKeyDown={(e) => {
             // Enter posts; Shift+Enter is a newline. A note about a task is
             // usually one line, and the mouse trip for every one of them is
-            // what stops people writing them down at all. An Enter confirming
-            // an IME candidate does neither — Safari's completing Enter
-            // arrives after compositionend, so the shared guard, not a bare
-            // isComposing read (WebKit bug 165004).
-            if (e.key === "Enter" && !e.shiftKey && !imeEnter.confirmsComposition(e)) {
+            // what stops people writing them down at all.
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               void post();
             }
