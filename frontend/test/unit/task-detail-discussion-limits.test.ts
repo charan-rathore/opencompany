@@ -257,7 +257,7 @@ describe("the composer surfaces the limit", () => {
 describe("the composer keeps IME confirmation separate from posting", () => {
   it.each([
     { label: "composing Enter", isComposing: true, keyCode: 13, draft: "日本語を入力" },
-    { label: "Safari's composition-ending Enter", isComposing: false, keyCode: 229, draft: "中文输入" },
+    { label: "an Enter the IME handled (keyCode 229)", isComposing: false, keyCode: 229, draft: "中文输入" },
   ])("keeps the draft on $label, then posts on an ordinary Enter", async ({ isComposing, keyCode, draft }) => {
     const seen: string[] = [];
     await render(postingClient(seen));
@@ -276,6 +276,26 @@ describe("the composer keeps IME confirmation separate from posting", () => {
     expect(seen).toEqual([draft]);
     expect(textarea().value).toBe("");
     expect(enter.defaultPrevented).toBe(true);
+  });
+
+  it("keeps the draft on Safari's completing Enter (compositionend, then a plain Enter)", async () => {
+    // WebKit bug 165004: the completing keydown arrives after compositionend,
+    // isComposing already false, keyCode an ordinary 13. Only the just-ended
+    // composition burst marks it as the IME's, so neither of the other two
+    // signals can catch it.
+    const seen: string[] = [];
+    await render(postingClient(seen));
+    await type(textarea(), "한국어 입력");
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => {
+      textarea().dispatchEvent(enter);
+    });
+
+    expect(seen).toEqual([]);
+    expect(textarea().value).toBe("한국어 입력");
   });
 
   it("leaves Shift+Enter to the textarea", async () => {
