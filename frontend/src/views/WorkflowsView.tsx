@@ -3646,8 +3646,11 @@ export function WorkflowsView({
             value={request}
             onChange={(e) => setRequest(e.target.value)}
             onKeyDown={(e) => {
-              // Enter runs, exactly as it did from the toolbar box (#154).
-              if (e.key === "Enter") runWithInput(false);
+              // Enter runs, exactly as it did from the toolbar box (#154) —
+              // but an Enter still confirming an IME candidate is the
+              // composition's, not a dispatch: firing here would run the
+              // workflow on the half-composed text.
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) runWithInput(false);
             }}
             placeholder="What should this run work on?"
             aria-label="Request for this run"

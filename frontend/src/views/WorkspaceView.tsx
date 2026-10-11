@@ -3196,7 +3196,10 @@ function NamePrompt({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && name.trim()) submit(name);
+                  // An Enter still confirming an IME candidate belongs to the
+                  // composition, not to submit — filing "かな" half-composed
+                  // names the note or folder something nobody typed.
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing && name.trim()) submit(name);
                 }}
                 placeholder={state?.mode === "folder" ? "e.g. Campaigns" : "e.g. Notes"}
               />
