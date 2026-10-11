@@ -95,6 +95,20 @@ describe("SearchDialog and IME composition", () => {
     expect(window.location.hash).toBe("");
   });
 
+  it("does not activate on Safari's completing Enter (compositionend, then a plain Enter)", () => {
+    // WebKit bug 165004: the Enter that commits the candidate arrives after
+    // compositionend, isComposing already false. Only the burst marks it.
+    const onOpenChange = vi.fn();
+    const input = renderDialog(onOpenChange);
+    setValue(input, "かな");
+    act(() => {
+      input.dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    enter(input, false);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe("");
+  });
+
   it("still activates the highlighted result on a settled Enter", () => {
     const onOpenChange = vi.fn();
     const input = renderDialog(onOpenChange);
