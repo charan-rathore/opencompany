@@ -291,6 +291,22 @@ describe("the run input is off the toolbar but still reachable (#1204)", () => {
     expect(posts).toHaveLength(1);
     expect(posts[0].body).toEqual({ input: { request: "かな" } });
   });
+
+  it("does not run on Safari's completing Enter (compositionend, then a plain Enter)", async () => {
+    // WebKit bug 165004: the completing keydown arrives after compositionend
+    // with isComposing already false. Only the just-ended burst marks it.
+    await mount();
+    const field = await typeIntoDialog("かな");
+    await act(async () => {
+      field.dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    await act(async () => {
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+
+    expect(posts).toHaveLength(0);
+    expect(byTestId("workflow-run-input-dialog")).not.toBeNull();
+  });
 });
 
 describe("the toolbar's Run never carries a payload nobody can see (#1204)", () => {

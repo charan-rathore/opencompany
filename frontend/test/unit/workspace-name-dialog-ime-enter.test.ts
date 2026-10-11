@@ -141,4 +141,18 @@ describe("the workspace name dialog and IME composition", () => {
     expect(workspacePosts()).toHaveLength(1);
     expect((workspacePosts()[0][1] as { name: string }).name).toBe("かな");
   });
+
+  it("does not submit on Safari's completing Enter (compositionend, then a plain Enter)", async () => {
+    // WebKit bug 165004: the completing keydown arrives after compositionend
+    // with isComposing already false. Only the just-ended burst marks it.
+    const input = await openNewFolderDialog();
+    typeInto(input, "かな");
+    act(() => {
+      input.dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    enter(input, false);
+
+    expect(workspacePosts()).toHaveLength(0);
+    expect(document.querySelector("#fs-name")).not.toBeNull();
+  });
 });
