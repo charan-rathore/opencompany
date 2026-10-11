@@ -62,6 +62,62 @@ describe("MessageComposer and IME composition", () => {
     expect(textarea.value).toBe("かな");
   });
 
+  it("does not send on Safari's completing Enter (compositionend, then a plain Enter)", () => {
+    // WebKit bug 165004: the Enter that commits the candidate is dispatched
+    // AFTER compositionend, with isComposing already false and an ordinary
+    // keyCode. The only thing marking it is that the composition just ended.
+    const onSend = vi.fn();
+    const textarea = composerWith(onSend);
+    act(() => {
+      setValue(textarea, "かな");
+    });
+    act(() => {
+      textarea.dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    enter(textarea, false);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("かな");
+  });
+
+  it("does not send on an Enter the IME handled (keyCode 229)", () => {
+    const onSend = vi.fn();
+    const textarea = composerWith(onSend);
+    act(() => {
+      setValue(textarea, "かな");
+    });
+    act(() => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+          keyCode: 229,
+        }),
+      );
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("かな");
+  });
+
+  it("sends on a genuine Enter once the composition burst has passed", () => {
+    const onSend = vi.fn();
+    const textarea = composerWith(onSend);
+    act(() => {
+      setValue(textarea, "かな");
+    });
+    act(() => {
+      textarea.dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(Date.now() + 5000);
+    try {
+      enter(textarea, false);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(onSend).toHaveBeenCalledWith("かな", undefined, undefined, undefined);
+  });
+
   it("still sends on a settled Enter", () => {
     const onSend = vi.fn();
     const textarea = composerWith(onSend);
