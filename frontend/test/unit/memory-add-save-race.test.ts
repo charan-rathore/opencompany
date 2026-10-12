@@ -88,6 +88,38 @@ describe("Add learning save race", () => {
     expect(textarea().value).toBe(" and async standups");
   });
 
+  it("keeps a kind changed while an earlier save is in flight", async () => {
+    const { client, finishSave } = clientWithPendingSave();
+    await act(async () => {
+      root.render(createElement(MemoryView, { client, company: "acme", sub: "upload" }));
+    });
+    await act(async () => {});
+
+    await type("Client prefers Friday reviews");
+    await act(async () => {
+      (container.querySelector('[data-testid="memory-save"]') as HTMLButtonElement).click();
+    });
+    // Change the kind while the save is pending: the save's completion must
+    // not reset a choice it did not send.
+    await act(async () => {
+      (container.querySelector("#mem-kind") as HTMLElement).click();
+    });
+    const option = Array.from(document.querySelectorAll('[role="option"]')).find(
+      (o) => o.textContent === "Preference",
+    );
+    if (!option) throw new Error("no Preference option in the open popup");
+    await act(async () => {
+      (option as HTMLElement).click();
+    });
+    await act(async () => {
+      finishSave();
+    });
+    await act(async () => {});
+
+    const trigger = container.querySelector("#mem-kind") as HTMLElement;
+    expect(trigger.textContent).toContain("Preference");
+  });
+
   it("still clears the form when nothing changed during the save", async () => {
     const { client, finishSave } = clientWithPendingSave();
     await act(async () => {
