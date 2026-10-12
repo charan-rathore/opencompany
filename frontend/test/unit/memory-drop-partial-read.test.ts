@@ -89,7 +89,7 @@ describe("DropZone partial reads", () => {
         createElement(DropZone, {
           client: c,
           company: "acme",
-          discarding: false,
+          off: false,
           onIngested: () => {},
         }),
       );
