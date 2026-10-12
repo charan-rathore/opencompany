@@ -619,12 +619,14 @@ test('attributeMergeCommits: octopus merge credits both branch parents', () => {
 });
 
 test('attributeMergeCommits: nested merge never overwrites an earlier attribution', () => {
-  // git log order is newest-first, so the OUTER merge (PR #200) is processed
-  // before the INNER merge (PR #100) whose branch it contains. Both merges can
-  // select the same branch commit. Reassigning it to the inner PR would erase
-  // PR #200 from contributor statistics while both merges are cleared.
-  // Instead the first attribution stands, and the inner merge keeps its own PR
-  // through the no-targets fallback.
+  // collectCommits runs `git log --reverse`, so production feeds commits
+  // oldest-first: the branch commit, then the INNER merge (PR #100), then the
+  // OUTER merge (PR #200) whose branch it contains. Both merges select the
+  // same branch commit. The inner merge claims it first; the outer merge must
+  // not overwrite that attribution, because reassigning the branch commit to
+  // PR #200 would erase PR #100 from contributor statistics while both merges
+  // are cleared. Instead the outer merge keeps its own PR through the
+  // no-targets fallback.
   const outerMerge = makeCommit(
     'mergeOut',
     'Merge pull request #200 from org/outer-feature',
@@ -648,21 +650,21 @@ test('attributeMergeCommits: nested merge never overwrites an earlier attributio
   );
 
   const fetch = (sha) => (sha === 'mergeOut' || sha === 'mergeIn' ? ['branch1'] : []);
-  // git log emits newest-first: outer merge, then inner merge, then the branch commit.
-  const result = attributeMergeCommits([outerMerge, innerMerge, branchCommit], fetch);
+  // Production order is oldest-first: branch commit, inner merge, outer merge.
+  const result = attributeMergeCommits([branchCommit, innerMerge, outerMerge], fetch);
 
   const branch = result.find((c) => c.sha === 'branch1');
   const inner = result.find((c) => c.sha === 'mergeIn');
   const outer = result.find((c) => c.sha === 'mergeOut');
-  assert.equal(branch.primaryPrNumber, 200, 'first (outer) attribution must stand');
-  assert.equal(outer.primaryPrNumber, null, 'outer merge is cleared');
-  assert.equal(inner.primaryPrNumber, 100, 'inner merge keeps PR #100 via the fallback');
+  assert.equal(branch.primaryPrNumber, 100, 'first (inner) attribution must stand');
+  assert.equal(inner.primaryPrNumber, null, 'inner merge is cleared');
+  assert.equal(outer.primaryPrNumber, 200, 'outer merge keeps PR #200 via the fallback');
 
   const stats = collectContributorStats(result, new Set());
   const contributor = stats.find((s) => s.name === 'Contributor');
   const maintainer = stats.find((s) => s.name === 'Maintainer');
-  assert.deepEqual(contributor?.prs, [200], 'contributor keeps the outer PR');
-  assert.deepEqual(maintainer?.prs, [100], 'PR #100 is preserved, not erased');
+  assert.deepEqual(contributor?.prs, [100], 'contributor keeps the inner PR');
+  assert.deepEqual(maintainer?.prs, [200], 'PR #200 is preserved, not erased');
 });
 
 // ---------------------------------------------------------------------------
