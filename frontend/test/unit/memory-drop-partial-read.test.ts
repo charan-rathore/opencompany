@@ -21,7 +21,7 @@ import { toast } from "sonner";
  */
 
 function client() {
-  const postForm = vi.fn(async () => ({
+  const postForm = vi.fn(async (_path: string, _form: FormData) => ({
     items: [{ name: "ok.txt", status: "stored" }],
   }));
   const c = {
@@ -107,7 +107,7 @@ describe("DropZone partial reads", () => {
     expect(toast.success).not.toHaveBeenCalled();
     // The readable file really went up: the partial read was not a total one.
     expect(postForm).toHaveBeenCalledTimes(1);
-    const form = vi.mocked(postForm).mock.calls[0][1] as FormData;
+    const form = vi.mocked(postForm).mock.calls[0][1];
     expect(form.getAll("file")).toHaveLength(1);
   });
 });

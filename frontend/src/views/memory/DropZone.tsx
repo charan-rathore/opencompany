@@ -214,7 +214,17 @@ export function DropZone({ client, company, onIngested, off }: Props) {
         }
         onIngested();
       } else if (items.length > 0) {
-        toast.error("nothing in that drop could be turned into memory");
+        // A failed store with unread entries is also a partial read: name
+        // the skips here too, like the no-items branch below does.
+        toast.error(
+          `nothing in that drop could be turned into memory${
+            skipped.length > 0
+              ? `; skipped ${skipped.length} ${
+                  skipped.length === 1 ? "entry" : "entries"
+                } that could not be read`
+              : ""
+          }`,
+        );
       } else if (skipped.length > 0) {
         toast.warning(
           `skipped ${skipped.length} ${
