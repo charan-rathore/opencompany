@@ -58,6 +58,13 @@ export function useImeEnter(burstMs = 100) {
         // Enter as keyCode 229; that Enter spends the burst window it follows,
         // or the operator's next Enter inside the window is swallowed.
         compositionEndAt.current = 0;
+        if (!native.isComposing) {
+          // A 229 Enter that arrives after compositionend is a real keydown
+          // whose default inserts a newline, and the caller skips its own
+          // preventDefault for a swallowed Enter - cancel it here. While
+          // composing, the default belongs to the IME and must run.
+          event.preventDefault();
+        }
         return true;
       }
       if (Date.now() - compositionEndAt.current < burstMs) {
