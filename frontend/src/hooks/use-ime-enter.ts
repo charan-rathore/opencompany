@@ -63,6 +63,10 @@ export function useImeEnter(burstMs = 100) {
       if (Date.now() - compositionEndAt.current < burstMs) {
         // Safari's completing Enter. Suppress exactly once, then stand down:
         // the window must not swallow a genuine Enter that follows quickly.
+        // The caller skips its own preventDefault for a suppressed Enter, so
+        // cancel the default here too - otherwise the completing Enter still
+        // inserts a newline mid-draft.
+        event.preventDefault();
         compositionEndAt.current = 0;
         return true;
       }
