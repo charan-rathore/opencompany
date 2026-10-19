@@ -256,9 +256,9 @@ describe("the composer surfaces the limit", () => {
 
 describe("the composer keeps IME confirmation separate from posting", () => {
   it.each([
-    { label: "composing Enter", isComposing: true, keyCode: 13, draft: "日本語を入力" },
-    { label: "an Enter the IME handled (keyCode 229)", isComposing: false, keyCode: 229, draft: "中文输入" },
-  ])("keeps the draft on $label, then posts on an ordinary Enter", async ({ isComposing, keyCode, draft }) => {
+    { label: "composing Enter", isComposing: true, keyCode: 13, draft: "日本語を入力", prevented: false },
+    { label: "an Enter the IME handled (keyCode 229)", isComposing: false, keyCode: 229, draft: "中文输入", prevented: true },
+  ])("keeps the draft on $label, then posts on an ordinary Enter", async ({ isComposing, keyCode, draft, prevented }) => {
     const seen: string[] = [];
     await render(postingClient(seen));
     await type(textarea(), draft);
@@ -271,7 +271,9 @@ describe("the composer keeps IME confirmation separate from posting", () => {
 
     expect(seen).toEqual([]);
     expect(textarea().value).toBe(draft);
-    expect(confirmation.defaultPrevented).toBe(false);
+    // A swallowed Enter must not insert a newline - but while composing the
+    // default belongs to the IME, so only the post-composition 229 cancels.
+    expect(confirmation.defaultPrevented).toBe(prevented);
 
     const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     await act(async () => { textarea().dispatchEvent(enter); });
