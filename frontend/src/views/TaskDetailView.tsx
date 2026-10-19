@@ -2611,6 +2611,7 @@ export function DiscussionTab({
           // rewrote. The counter and the disabled Post below say what is wrong
           // while the words are still on the screen to fix.
           onChange={(e) => setText(e.target.value)}
+          onCompositionStart={imeEnter.onCompositionStart}
           onCompositionEnd={imeEnter.onCompositionEnd}
           onKeyDown={(e) => {
             // Enter posts; Shift+Enter is a newline. A note about a task is
