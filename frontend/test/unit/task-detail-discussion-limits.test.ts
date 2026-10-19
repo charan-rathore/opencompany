@@ -300,6 +300,44 @@ describe("the composer keeps IME confirmation separate from posting", () => {
     expect(textarea().value).toBe("한국어 입력");
   });
 
+  it("posts on the Enter right after a Chrome-style confirmed composition", async () => {
+    // Chrome/Firefox order: the confirming keydown (isComposing) runs BEFORE
+    // compositionend. That compositionend must not arm the burst window, or the
+    // operator's immediate send Enter would be misclassified as a confirmation.
+    const seen: string[] = [];
+    await render(postingClient(seen));
+    await type(textarea(), "日本語を入力");
+    const confirm = new KeyboardEvent("keydown", {
+      key: "Enter", bubbles: true, cancelable: true, isComposing: true,
+    });
+    await act(async () => { textarea().dispatchEvent(confirm); });
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const send = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(send); });
+
+    expect(seen).toEqual(["日本語を入力"]);
+  });
+
+  it("posts on the operator's Enter right after Safari's completing Enter", async () => {
+    // The burst window suppresses Safari's completing Enter exactly once; a
+    // genuine Enter inside the same window must still post.
+    const seen: string[] = [];
+    await render(postingClient(seen));
+    await type(textarea(), "한국어 입력");
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const completing = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(completing); });
+    expect(seen).toEqual([]);
+
+    const send = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(send); });
+    expect(seen).toEqual(["한국어 입력"]);
+  });
+
   it("leaves Shift+Enter to the textarea", async () => {
     const seen: string[] = [];
     await render(postingClient(seen));
