@@ -282,6 +282,33 @@ describe("the composer keeps IME confirmation separate from posting", () => {
     expect(enter.defaultPrevented).toBe(true);
   });
 
+  it("keeps the IME's default on a 229 confirming Enter that precedes compositionend", async () => {
+    // WebKit can mark the confirming Enter keyCode 229 with isComposing
+    // already false even though compositionend has not fired yet. Cancelling
+    // that keydown's default breaks the IME commit, so while the composition
+    // is still active the hook must suppress the post without cancelling.
+    const seen: string[] = [];
+    await render(postingClient(seen));
+    await type(textarea(), "中文输入");
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionstart", { bubbles: true }));
+    });
+    const confirming = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(confirming, "keyCode", { value: 229 });
+    await act(async () => { textarea().dispatchEvent(confirming); });
+
+    expect(seen).toEqual([]);
+    expect(textarea().value).toBe("中文输入");
+    expect(confirming.defaultPrevented).toBe(false);
+
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(enter); });
+    expect(seen).toEqual(["中文输入"]);
+  });
+
   it("keeps the draft on Safari's completing Enter (compositionend, then a plain Enter)", async () => {
     // WebKit bug 165004: the completing keydown arrives after compositionend,
     // isComposing already false, keyCode an ordinary 13. Only the just-ended
