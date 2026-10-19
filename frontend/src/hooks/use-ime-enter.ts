@@ -19,19 +19,34 @@ import { useCallback, useRef } from "react";
  */
 export function useImeEnter(burstMs = 100) {
   const compositionEndAt = useRef(0);
+  const confirmedBeforeCompositionEnd = useRef(false);
 
   const onCompositionEnd = useCallback(() => {
-    compositionEndAt.current = Date.now();
+    if (confirmedBeforeCompositionEnd.current) {
+      // Chrome/Firefox order: the confirming keydown already ran with
+      // isComposing (or keyCode 229), so this compositionend needs no burst
+      // window at all - arming one would swallow the operator's next Enter.
+      confirmedBeforeCompositionEnd.current = false;
+      compositionEndAt.current = 0;
+    } else {
+      compositionEndAt.current = Date.now();
+    }
   }, []);
 
   const confirmsComposition = useCallback(
     (event: React.KeyboardEvent) => {
       const native = event.nativeEvent;
-      return (
-        native.isComposing ||
-        native.keyCode === 229 ||
-        Date.now() - compositionEndAt.current < burstMs
-      );
+      if (native.isComposing || native.keyCode === 229) {
+        confirmedBeforeCompositionEnd.current = true;
+        return true;
+      }
+      if (Date.now() - compositionEndAt.current < burstMs) {
+        // Safari's completing Enter. Suppress exactly once, then stand down:
+        // the window must not swallow a genuine Enter that follows quickly.
+        compositionEndAt.current = 0;
+        return true;
+      }
+      return false;
     },
     [burstMs],
   );
