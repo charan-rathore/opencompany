@@ -21,6 +21,14 @@ export function useImeEnter(burstMs = 100) {
   const compositionEndAt = useRef(0);
   const confirmedBeforeCompositionEnd = useRef(false);
 
+  const onCompositionStart = useCallback(() => {
+    // A new composition discards confirmation state left by the last one:
+    // a keyCode-229 completing Enter that arrived after compositionend set
+    // this flag without an end of its own to consume it, and it must not
+    // disarm this composition's burst window.
+    confirmedBeforeCompositionEnd.current = false;
+  }, []);
+
   const onCompositionEnd = useCallback(() => {
     if (confirmedBeforeCompositionEnd.current) {
       // Chrome/Firefox order: the confirming keydown already ran with
@@ -36,9 +44,12 @@ export function useImeEnter(burstMs = 100) {
   const confirmsComposition = useCallback(
     (event: React.KeyboardEvent) => {
       const native = event.nativeEvent;
-      if (native.repeat) {
+      if (native.repeat && !native.isComposing) {
         // A held Enter repeats after compositionend with isComposing already
-        // false. The repeat is the same gesture, never a second post.
+        // false. The repeat is the same gesture, never a second post - and
+        // with the composition over its default action is a real newline, so
+        // cancel that too or holding the key edits the draft it cannot send.
+        event.preventDefault();
         return true;
       }
       if (native.isComposing || native.keyCode === 229) {
@@ -60,5 +71,5 @@ export function useImeEnter(burstMs = 100) {
     [burstMs],
   );
 
-  return { onCompositionEnd, confirmsComposition };
+  return { onCompositionStart, onCompositionEnd, confirmsComposition };
 }
