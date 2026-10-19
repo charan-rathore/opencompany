@@ -298,6 +298,10 @@ describe("the composer keeps IME confirmation separate from posting", () => {
 
     expect(seen).toEqual([]);
     expect(textarea().value).toBe("한국어 입력");
+    // The caller skips its own preventDefault for a suppressed Enter; the
+    // guard must cancel the default itself or the completing Enter inserts a
+    // newline mid-draft in a real browser.
+    expect(enter.defaultPrevented).toBe(true);
   });
 
   it("posts on the Enter right after a Chrome-style confirmed composition", async () => {
