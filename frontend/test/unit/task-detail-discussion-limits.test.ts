@@ -309,6 +309,37 @@ describe("the composer keeps IME confirmation separate from posting", () => {
     expect(seen).toEqual(["中文输入"]);
   });
 
+  it("keeps the IME's default on a repeated 229 confirming Enter before compositionend", async () => {
+    // Holding the confirming Enter repeats it: repeat=true, isComposing=false,
+    // keyCode 229, and on WebKit possibly before compositionend. The repeat is
+    // still the composition's key, so its default must run for the commit.
+    const seen: string[] = [];
+    await render(postingClient(seen));
+    await type(textarea(), "中文输入");
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionstart", { bubbles: true }));
+    });
+    const confirming = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(confirming, "keyCode", { value: 229 });
+    await act(async () => { textarea().dispatchEvent(confirming); });
+    const repeated = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, repeat: true });
+    Object.defineProperty(repeated, "keyCode", { value: 229 });
+    Object.defineProperty(repeated, "repeat", { value: true });
+    await act(async () => { textarea().dispatchEvent(repeated); });
+
+    expect(seen).toEqual([]);
+    expect(textarea().value).toBe("中文输入");
+    expect(confirming.defaultPrevented).toBe(false);
+    expect(repeated.defaultPrevented).toBe(false);
+
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(enter); });
+    expect(seen).toEqual(["中文输入"]);
+  });
+
   it("keeps the draft on Safari's completing Enter (compositionend, then a plain Enter)", async () => {
     // WebKit bug 165004: the completing keydown arrives after compositionend,
     // isComposing already false, keyCode an ordinary 13. Only the just-ended
