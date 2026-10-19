@@ -378,11 +378,46 @@ describe("the composer keeps IME confirmation separate from posting", () => {
       for (let i = 0; i < 3; i++) {
         const repeat = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, repeat: true });
         await act(async () => { textarea().dispatchEvent(repeat); });
+        // The composition is over, so the default action would be a real
+        // newline; every repeat must be cancelled, not only kept from posting.
+        expect(repeat.defaultPrevented).toBe(true);
       }
     } finally {
       pastWindow.mockRestore();
     }
     expect(seen).toEqual([]);
+    expect(textarea().value).toBe("한국어");
+  });
+
+  it("arms the burst again for a composition that follows a post-end 229 completing Enter", async () => {
+    // WebKit order with a 229-marked completion: compositionend first, then
+    // the completing Enter as keyCode 229. That keydown spends the burst and
+    // must not leak confirmation state into the next composition on the same
+    // mounted composer - its own completing Enter still needs the burst.
+    const seen: string[] = [];
+    await render(postingClient(seen));
+    await type(textarea(), "日本語");
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const completing229 = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(completing229, "keyCode", { value: 229 });
+    await act(async () => { textarea().dispatchEvent(completing229); });
+    expect(seen).toEqual([]);
+
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionstart", { bubbles: true }));
+    });
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const completing = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(completing); });
+    expect(seen).toEqual([]);
+
+    const send = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(send); });
+    expect(seen).toEqual(["日本語"]);
   });
 
   it("leaves Shift+Enter to the textarea", async () => {
