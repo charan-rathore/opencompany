@@ -20,8 +20,10 @@ import { useCallback, useRef } from "react";
 export function useImeEnter(burstMs = 100) {
   const compositionEndAt = useRef(0);
   const confirmedBeforeCompositionEnd = useRef(false);
+  const compositionActive = useRef(false);
 
   const onCompositionStart = useCallback(() => {
+    compositionActive.current = true;
     // A new composition discards confirmation state left by the last one:
     // a keyCode-229 completing Enter that arrived after compositionend set
     // this flag without an end of its own to consume it, and it must not
@@ -30,6 +32,7 @@ export function useImeEnter(burstMs = 100) {
   }, []);
 
   const onCompositionEnd = useCallback(() => {
+    compositionActive.current = false;
     if (confirmedBeforeCompositionEnd.current) {
       // Chrome/Firefox order: the confirming keydown already ran with
       // isComposing (or keyCode 229), so this compositionend needs no burst
@@ -58,11 +61,14 @@ export function useImeEnter(burstMs = 100) {
         // Enter as keyCode 229; that Enter spends the burst window it follows,
         // or the operator's next Enter inside the window is swallowed.
         compositionEndAt.current = 0;
-        if (!native.isComposing) {
+        if (!native.isComposing && !compositionActive.current) {
           // A 229 Enter that arrives after compositionend is a real keydown
           // whose default inserts a newline, and the caller skips its own
-          // preventDefault for a swallowed Enter - cancel it here. While
-          // composing, the default belongs to the IME and must run.
+          // preventDefault for a swallowed Enter - cancel it here. WebKit can
+          // also report the confirming Enter as 229 with isComposing already
+          // false *before* compositionend; while a composition is still
+          // active the default belongs to the IME and cancelling it breaks
+          // the commit, so only a 229 outside any composition is cancelled.
           event.preventDefault();
         }
         return true;
