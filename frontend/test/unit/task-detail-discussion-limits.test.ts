@@ -338,6 +338,53 @@ describe("the composer keeps IME confirmation separate from posting", () => {
     expect(seen).toEqual(["한국어 입력"]);
   });
 
+  it("posts on the operator's Enter after a completing Enter reported as keyCode 229", async () => {
+    // Some engines end the composition first and still send the completing
+    // Enter as keyCode 229. That Enter spends the burst window it follows;
+    // the operator's next Enter must post.
+    const seen: string[] = [];
+    await render(postingClient(seen));
+    await type(textarea(), "日本語");
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    const completing = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(completing, "keyCode", { value: 229 });
+    await act(async () => { textarea().dispatchEvent(completing); });
+    expect(seen).toEqual([]);
+
+    const send = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { textarea().dispatchEvent(send); });
+    expect(seen).toEqual(["日本語"]);
+  });
+
+  it("ignores the auto-repeats of a held confirming Enter", async () => {
+    // Holding Enter to confirm a composition repeats the key after
+    // compositionend with isComposing already false. Each repeat is the same
+    // gesture; none of them posts.
+    const seen: string[] = [];
+    await render(postingClient(seen));
+    await type(textarea(), "한국어");
+    const confirm = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, isComposing: true });
+    await act(async () => { textarea().dispatchEvent(confirm); });
+    await act(async () => {
+      textarea().dispatchEvent(new Event("compositionend", { bubbles: true }));
+    });
+    // Held-Enter repeats keep coming long after the composition burst window
+    // closes, so run them past it; the repeat signal, not the window, must
+    // be what stops them.
+    const pastWindow = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5000);
+    try {
+      for (let i = 0; i < 3; i++) {
+        const repeat = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, repeat: true });
+        await act(async () => { textarea().dispatchEvent(repeat); });
+      }
+    } finally {
+      pastWindow.mockRestore();
+    }
+    expect(seen).toEqual([]);
+  });
+
   it("leaves Shift+Enter to the textarea", async () => {
     const seen: string[] = [];
     await render(postingClient(seen));
