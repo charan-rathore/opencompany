@@ -52,7 +52,10 @@ export function useImeEnter(burstMs = 100) {
         // false. The repeat is the same gesture, never a second post - and
         // with the composition over its default action is a real newline, so
         // cancel that too or holding the key edits the draft it cannot send.
-        event.preventDefault();
+        // A repeated confirming Enter can also arrive as keyCode 229 while the
+        // composition is still active; its default belongs to the IME, so
+        // cancel only once no composition is live.
+        if (!compositionActive.current) event.preventDefault();
         return true;
       }
       if (native.isComposing || native.keyCode === 229) {
