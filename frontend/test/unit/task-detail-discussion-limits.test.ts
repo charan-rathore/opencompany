@@ -263,8 +263,10 @@ describe("the composer keeps IME confirmation separate from posting", () => {
     await render(postingClient(seen));
     await type(textarea(), draft);
     const confirmation = new KeyboardEvent("keydown", {
-      key: "Enter", bubbles: true, cancelable: true, isComposing, keyCode,
+      key: "Enter", bubbles: true, cancelable: true, isComposing,
     });
+    // keyCode is read-only and some environments ignore the constructor init, so set it explicitly.
+    Object.defineProperty(confirmation, "keyCode", { value: keyCode });
     await act(async () => { textarea().dispatchEvent(confirmation); });
 
     expect(seen).toEqual([]);
